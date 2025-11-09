@@ -23,9 +23,31 @@ block content
         p(class="radio-placeholder") 请选择编码器
 
     fieldset
-      legend 质量（CRF）
+      legend 输出分辨率
+      div(id="scaleOptions", class="radio-group")
+        each scale, index in resolutionOptions
+          label(class="radio-option")
+            input(type="radio", name="scale", value=scale.key, required=index === 0, checked=index === 0)
+            span= scale.label
+
+    fieldset
+      legend 质量控制模式
+      div(id="qualityModeOptions", class="radio-group")
+        label(class="radio-option")
+          input(type="radio", name="qualityMode", value="crf", checked, required)
+          span CRF（恒定质量）
+        label(class="radio-option")
+          input(type="radio", name="qualityMode", value="bitrate")
+          span 码率（恒定带宽）
+
+    fieldset(id="crfFieldset")
+      legend CRF 目标
       div(id="crfOptions", class="radio-group")
         p(class="radio-placeholder") 请选择 CRF 值
+
+    fieldset(id="bitrateFieldset", class="hidden")
+      legend 目标码率（Kbps）
+      input(type="number", id="bitrateKbps", name="bitrateKbps", min="100", step="50", placeholder="例如 3500")
 
     fieldset
       legend 编码 Profile
@@ -36,6 +58,15 @@ block content
       legend 速度预设（Preset）
       div(id="presetOptions", class="radio-group")
         p(class="radio-placeholder") 请选择编码预设
+
+    fieldset
+      legend VMAF 目标
+      div(class="vmaf-range")
+        label(for="vmafMin") 最低值
+        input(type="number", id="vmafMin", name="vmafMin", min="0", max="100", step="0.1", placeholder="例如 90")
+        label(for="vmafMax") 最高值
+        input(type="number", id="vmafMax", name="vmafMax", min="0", max="100", step="0.1", placeholder="例如 95")
+      p(class="field-hint") 设置区间后系统会自动调整码率以靠近目标 VMAF（仅限码率模式）。
 
     fieldset
       legend 可选分析
@@ -57,6 +88,13 @@ block content
     const profileOptionsContainer = document.getElementById('profileOptions');
     const presetOptionsContainer = document.getElementById('presetOptions');
     const crfOptionsContainer = document.getElementById('crfOptions');
+    const qualityModeContainer = document.getElementById('qualityModeOptions');
+    const crfFieldset = document.getElementById('crfFieldset');
+    const bitrateFieldset = document.getElementById('bitrateFieldset');
+    const bitrateInput = document.getElementById('bitrateKbps');
+    const vmafMinInput = document.getElementById('vmafMin');
+    const vmafMaxInput = document.getElementById('vmafMax');
+    let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
       acc[codec.key] = codec;
@@ -157,6 +195,13 @@ block content
       return firstPreset?.key ?? null;
     }
 
+    function setCrfGroupRequired(enabled) {
+      const inputs = crfOptionsContainer.querySelectorAll('input[name="crf"]');
+      inputs.forEach((input, index) => {
+        input.required = enabled && index === 0;
+      });
+    }
+
     function renderEncoderDetails(codecKey, encoderKey, selected = {}) {
       const encoder = getEncoderConfig(codecKey, encoderKey);
       if (!encoder) {
@@ -190,6 +235,7 @@ block content
         '请选择 CRF 值',
         preferredCrf
       );
+      setCrfGroupRequired(currentQualityMode === 'crf');
       return { profileSelection, presetSelection };
     }
 
@@ -257,6 +303,35 @@ block content
       updateEncoderOptions(initialCodecInput.value);
     }
 
+    function updateQualityModeUI(mode) {
+      currentQualityMode = mode;
+      if (mode === 'bitrate') {
+        crfFieldset.classList.add('hidden');
+        bitrateFieldset.classList.remove('hidden');
+        setCrfGroupRequired(false);
+      } else {
+        crfFieldset.classList.remove('hidden');
+        bitrateFieldset.classList.add('hidden');
+        setCrfGroupRequired(true);
+      }
+      if (bitrateInput) {
+        bitrateInput.required = mode === 'bitrate';
+        bitrateInput.disabled = mode !== 'bitrate';
+      }
+      [vmafMinInput, vmafMaxInput].forEach((input) => {
+        if (input) {
+          input.disabled = mode !== 'bitrate';
+        }
+      });
+    }
+
+    qualityModeContainer.addEventListener('change', (event) => {
+      if (event.target.name !== 'qualityMode') return;
+      updateQualityModeUI(event.target.value);
+    });
+
+    updateQualityModeUI('crf');
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       message.textContent = '正在提交...';
@@ -266,18 +341,47 @@ block content
       const profile = formData.get('profile');
       const preset = formData.get('preset');
       const crf = formData.get('crf');
-      if (!codec || !impl || !profile || !preset || !crf) {
-        message.textContent = '请选择完整的编码、编码器、Profile、Preset 与 CRF';
+      const scale = formData.get('scale');
+      const qualityMode = formData.get('qualityMode') || 'crf';
+      const bitrateValue = formData.get('bitrateKbps');
+      if (!codec || !impl || !profile || !preset || !scale) {
+        message.textContent = '请输入完整的输入、输出与编码选项';
         return;
       }
-      const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf}`;
-      const enableVmaf = formData.get('enableVmaf') === 'on';
+      if (qualityMode === 'crf' && !crf) {
+        message.textContent = '请选择 CRF 值';
+        return;
+      }
+      if (qualityMode === 'bitrate' && !bitrateValue) {
+        message.textContent = '请输入目标码率';
+        return;
+      }
+      const vmafMin = parseFloat(formData.get('vmafMin'));
+      const vmafMax = parseFloat(formData.get('vmafMax'));
+      const hasVmafRange = Number.isFinite(vmafMin) && Number.isFinite(vmafMax);
+      if (hasVmafRange && vmafMin > vmafMax) {
+        message.textContent = 'VMAF 最低值不能大于最高值';
+        return;
+      }
+      const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf || 'bitrate'}`;
+      const enableVmaf = formData.get('enableVmaf') === 'on' || hasVmafRange;
       const payload = {
         inputPath: formData.get('inputPath'),
         outputPath: formData.get('outputPath'),
         codec,
         impl,
-        params: { presetKey, profile, preset, crf, enableVmaf }
+        params: {
+          presetKey,
+          profile,
+          preset,
+          crf,
+          scale,
+          qualityMode,
+          bitrateKbps: qualityMode === 'bitrate' ? Number(bitrateValue) : null,
+          enableVmaf,
+          vmafMin: hasVmafRange ? vmafMin : null,
+          vmafMax: hasVmafRange ? vmafMax : null
+        }
       };
       const res = await fetch('/api/jobs', {
         method: 'POST',

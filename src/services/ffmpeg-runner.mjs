@@ -6,10 +6,15 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { stat } from 'node:fs/promises';
-import { audioArgs, buildVideoArgs, videoPresets } from './presets.mjs';
+import { audioArgs, buildVideoArgs, videoPresets, getResolutionPreset } from './presets.mjs';
 import { updateJob } from '../controllers/jobs.mjs';
 
 const runningChildren = new Map();
+const MAX_VMAF_TUNING_ATTEMPTS = 5;
+const MIN_BITRATE_KBPS = 200;
+const MAX_BITRATE_KBPS = 80000;
+const BITRATE_INCREASE_FACTOR = 1.25;
+const BITRATE_DECREASE_FACTOR = 0.85;
 
 /**
  * @description 解析形如 HH:MM:SS.xx 的时间
@@ -60,13 +65,181 @@ export async function probeDuration(ffprobeBin, inputPath) {
 export async function runJob(job, durationSec, config) {
   await updateJob(job.id, { status: 'running', progress: 0, error_msg: null });
 
+  const scalePreset = getResolutionPreset(job.params?.scale ?? 'source');
+  let requestedBitrate = Number(job.params?.bitrateKbps);
+  const hasValidBitrate = Number.isFinite(requestedBitrate) && requestedBitrate > 0;
+  const qualityMode = job.params?.qualityMode === 'bitrate' && hasValidBitrate ? 'bitrate' : 'crf';
+  let currentBitrate = qualityMode === 'bitrate'
+    ? Math.max(MIN_BITRATE_KBPS, Math.min(MAX_BITRATE_KBPS, Math.round(requestedBitrate)))
+    : null;
+  const vmafTargets = qualityMode === 'bitrate' ? parseVmafTargets(job.params) : null;
+  const adaptiveVmaf = Boolean(vmafTargets && currentBitrate);
+  const enableVmaf = Boolean(job.params?.enableVmaf || adaptiveVmaf);
+  const maxAttempts = adaptiveVmaf ? MAX_VMAF_TUNING_ATTEMPTS : 1;
+  const history = [];
+  let attempt = 0;
+  let lastMetrics = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const qualityOverride = qualityMode === 'bitrate'
+      ? buildBitrateOverride(currentBitrate)
+      : null;
+    const result = await transcodeOnce(job, durationSec, config, {
+      qualityOverride,
+      scalePreset,
+      enableVmaf
+    });
+    if (!result.success) {
+      await finalizeOnFailure(job.id, result);
+      return;
+    }
+    lastMetrics = result.metrics;
+    if (qualityMode === 'bitrate' && qualityOverride?.bitrateKbps) {
+      lastMetrics.usedBitrateKbps = qualityOverride.bitrateKbps;
+    }
+    if (adaptiveVmaf && result.metrics?.vmafScore) {
+      history.push({
+        attempt,
+        bitrateKbps: qualityOverride?.bitrateKbps ?? currentBitrate,
+        vmafScore: result.metrics.vmafScore,
+        vmafMin: result.metrics.vmafMin,
+        vmafMax: result.metrics.vmafMax
+      });
+      const nextBitrate = decideNextBitrate(
+        qualityOverride?.bitrateKbps ?? currentBitrate,
+        result.metrics,
+        vmafTargets
+      );
+      if (nextBitrate && nextBitrate !== currentBitrate) {
+        currentBitrate = nextBitrate;
+        continue;
+      }
+    }
+    break;
+  }
+
+  if (!lastMetrics) {
+    await updateJob(job.id, {
+      status: 'failed',
+      error_msg: '编码未产生指标结果'
+    });
+    return;
+  }
+
+  if (history.length) {
+    lastMetrics.vmafTuningHistory = history;
+    lastMetrics.targetVmaf = vmafTargets;
+    const finalScore = lastMetrics.vmafScore;
+    if (
+      finalScore !== undefined &&
+      finalScore !== null &&
+      vmafTargets &&
+      (finalScore < vmafTargets.min || finalScore > vmafTargets.max)
+    ) {
+      lastMetrics.vmafNote = '已达到最大调整次数，仍未进入目标范围';
+    }
+  }
+
+  await updateJob(job.id, {
+    status: 'success',
+    progress: 100,
+    metrics_json: lastMetrics
+  });
+}
+
+function parseVmafTargets(params = {}) {
+  const min = Number(params.vmafMin);
+  const max = Number(params.vmafMax);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max > 100 || min > max) {
+    return null;
+  }
+  return { min, max };
+}
+
+function buildBitrateOverride(bitrate) {
+  if (!Number.isFinite(bitrate) || bitrate <= 0) {
+    return null;
+  }
+  const normalized = Math.max(MIN_BITRATE_KBPS, Math.min(MAX_BITRATE_KBPS, Math.round(bitrate)));
+  return {
+    mode: 'bitrate',
+    bitrateKbps: normalized,
+    maxrateKbps: Math.min(MAX_BITRATE_KBPS, Math.round(normalized * 1.15)),
+    minrateKbps: Math.max(MIN_BITRATE_KBPS, Math.round(normalized * 0.7)),
+    bufsizeKbps: Math.round(normalized * 2)
+  };
+}
+
+function decideNextBitrate(current, metrics, targets) {
+  if (!targets || !Number.isFinite(current)) {
+    return null;
+  }
+  const score = Number(metrics?.vmafScore);
+  if (!Number.isFinite(score)) {
+    return null;
+  }
+  if (score < targets.min) {
+    const next = Math.min(MAX_BITRATE_KBPS, Math.round(current * BITRATE_INCREASE_FACTOR));
+    return next !== current ? next : null;
+  }
+  if (score > targets.max) {
+    const next = Math.max(MIN_BITRATE_KBPS, Math.round(current * BITRATE_DECREASE_FACTOR));
+    return next !== current ? next : null;
+  }
+  return null;
+}
+
+async function finalizeOnFailure(jobId, result) {
+  if (result.status === 'canceled') {
+    await updateJob(jobId, {
+      status: 'canceled',
+      error_msg: null,
+      progress: result.progress ?? 0
+    });
+    return;
+  }
+  await updateJob(jobId, {
+    status: 'failed',
+    error_msg: result.error ?? 'ffmpeg 执行失败',
+    progress: result.progress ?? 0
+  });
+}
+
+async function transcodeOnce(job, durationSec, config, options) {
+  const ffmpegArgs = buildFfmpegArgs(job, options.qualityOverride, options.scalePreset);
+  const execution = await runFfmpegProcess(job, durationSec, config, ffmpegArgs);
+  if (!execution.success) {
+    return execution;
+  }
+  try {
+    const metrics = await collectMetrics(
+      job,
+      execution.startTime,
+      durationSec,
+      config,
+      options.enableVmaf
+    );
+    return { success: true, metrics };
+  } catch (error) {
+    return {
+      success: false,
+      status: 'failed',
+      error: error.message,
+      progress: execution.progress
+    };
+  }
+}
+
+function buildFfmpegArgs(job, qualityOverride, scalePreset) {
   const ffmpegArgs = ['-y', '-i', job.input_path];
   const videoArgs = buildVideoArgs(
     job.codec,
     job.impl,
     job.params?.profile,
     job.params?.preset,
-    job.params?.crf
+    job.params?.crf,
+    qualityOverride
   );
   if (videoArgs) {
     ffmpegArgs.push(...videoArgs);
@@ -92,11 +265,17 @@ export async function runJob(job, durationSec, config) {
       ffmpegArgs.push(...preset.args);
     }
   }
+  if (scalePreset?.width && scalePreset?.height) {
+    ffmpegArgs.push('-vf', `scale=${scalePreset.width}:${scalePreset.height}`);
+  }
   if (job.params?.extraArgs && Array.isArray(job.params.extraArgs)) {
     ffmpegArgs.push(...job.params.extraArgs);
   }
   ffmpegArgs.push(...audioArgs(), job.output_path);
+  return ffmpegArgs;
+}
 
+async function runFfmpegProcess(job, durationSec, config, ffmpegArgs) {
   const startTime = Date.now();
   const child = spawn(config.ffmpeg.bin, ffmpegArgs, {
     stdio: ['ignore', 'ignore', 'pipe']
@@ -132,69 +311,54 @@ export async function runJob(job, durationSec, config) {
   const [code, signal] = await once(child, 'close');
   runningChildren.delete(job.id);
   rl.close();
-
   if (timeoutTimer) {
     clearTimeout(timeoutTimer);
   }
 
   if (signal === 'SIGTERM') {
-    await updateJob(job.id, {
-      status: 'canceled',
-      error_msg: null,
-      progress: lastProgress
-    });
-    return;
+    return { success: false, status: 'canceled', progress: lastProgress };
   }
-
   if (signal === 'SIGKILL') {
-    await updateJob(job.id, {
+    return {
+      success: false,
       status: 'failed',
-      error_msg: '任务执行超时并被终止',
+      error: '任务执行超时并被终止',
       progress: lastProgress
-    });
-    return;
+    };
   }
+  if (code !== 0) {
+    return {
+      success: false,
+      status: 'failed',
+      error: `ffmpeg 退出码 ${code}`,
+      progress: lastProgress
+    };
+  }
+  return { success: true, startTime, progress: lastProgress };
+}
 
-  if (code === 0) {
-    try {
-      const fileStat = await stat(job.output_path);
-      const encodeDurationSec = Number(((Date.now() - startTime) / 1000).toFixed(3));
-      const metrics = { sizeBytes: fileStat.size, encodeDurationSec };
-      if (typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0) {
-        metrics.encodeEfficiency = Number((encodeDurationSec / durationSec).toFixed(3));
-      }
-      if (job.params?.enableVmaf) {
-        try {
-          const vmafStats = await computeVmafScore(
-            config.ffmpeg.bin,
-            job.output_path,
-            job.input_path
-          );
-          metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
-          metrics.vmafMax = Number(vmafStats.max.toFixed(3));
-          metrics.vmafMin = Number(vmafStats.min.toFixed(3));
-        } catch (error) {
-          metrics.vmafError = error.message;
-        }
-      }
-      await updateJob(job.id, {
-        status: 'success',
-        progress: 100,
-        metrics_json: metrics
-      });
-    } catch (error) {
-      await updateJob(job.id, {
-        status: 'failed',
-        error_msg: `输出文件检查失败: ${error.message}`
-      });
-    }
-  } else {
-    await updateJob(job.id, {
-      status: 'failed',
-      error_msg: `ffmpeg 退出码 ${code}`,
-      progress: lastProgress
-    });
+async function collectMetrics(job, startTime, durationSec, config, enableVmaf) {
+  const fileStat = await stat(job.output_path);
+  const encodeDurationSec = Number(((Date.now() - startTime) / 1000).toFixed(3));
+  const metrics = { sizeBytes: fileStat.size, encodeDurationSec };
+  if (typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0) {
+    metrics.encodeEfficiency = Number((encodeDurationSec / durationSec).toFixed(3));
   }
+  if (enableVmaf) {
+    try {
+      const vmafStats = await computeVmafScore(
+        config.ffmpeg.bin,
+        job.output_path,
+        job.input_path
+      );
+      metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
+      metrics.vmafMax = Number(vmafStats.max.toFixed(3));
+      metrics.vmafMin = Number(vmafStats.min.toFixed(3));
+    } catch (error) {
+      metrics.vmafError = error.message;
+    }
+  }
+  return metrics;
 }
 
 /**

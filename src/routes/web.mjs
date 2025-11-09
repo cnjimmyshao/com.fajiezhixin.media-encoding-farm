@@ -4,7 +4,7 @@
  */
 import { Router } from 'express';
 import { listJobs, getJobById } from '../controllers/jobs.mjs';
-import { codecOptions } from '../services/presets.mjs';
+import { codecOptions, resolutionOptions } from '../services/presets.mjs';
 
 const router = Router();
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -33,7 +33,8 @@ router.get('/jobs/new', (req, res) => {
   const encoderSupport = req.app?.locals?.encoderSupport ?? new Set();
   res.render('jobs-new', {
     title: '新建任务',
-    codecOptions: codecOptions({ supportedEncoders: encoderSupport })
+    codecOptions: codecOptions({ supportedEncoders: encoderSupport }),
+    resolutionOptions
   });
 });
 

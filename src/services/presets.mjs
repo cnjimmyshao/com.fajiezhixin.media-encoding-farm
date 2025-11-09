@@ -13,9 +13,11 @@ export const codecMatrix = {
         label: 'SVT-AV1（CPU）',
         baseArgs: ['-c:v', 'libsvtav1'],
         presets: [
-          { key: 'speed-8', label: 'Preset 8（最快）', args: ['-preset', '8'] },
+          { key: 'speed-10', label: 'Preset 10（极速）', args: ['-preset', '10'] },
+          { key: 'speed-8', label: 'Preset 8（更快）', args: ['-preset', '8'] },
           { key: 'speed-6', label: 'Preset 6（均衡）', args: ['-preset', '6'] },
-          { key: 'speed-4', label: 'Preset 4（高质量）', args: ['-preset', '4'] }
+          { key: 'speed-4', label: 'Preset 4（高质量）', args: ['-preset', '4'] },
+          { key: 'speed-2', label: 'Preset 2（极致质量）', args: ['-preset', '2'] }
         ],
         profiles: [
           {
@@ -31,12 +33,20 @@ export const codecMatrix = {
             args: ['-pix_fmt', 'yuv420p10le'],
             defaultPreset: 'speed-4',
             defaultCrf: '28'
+          },
+          {
+            key: 'archival',
+            label: '存档 10-bit',
+            args: ['-pix_fmt', 'yuv420p10le'],
+            defaultPreset: 'speed-2',
+            defaultCrf: '26'
           }
         ],
         crfOptions: [
           { key: '36', label: 'CRF 36（快速）', value: '36' },
           { key: '32', label: 'CRF 32（均衡）', value: '32' },
-          { key: '28', label: 'CRF 28（高质量）', value: '28' }
+          { key: '28', label: 'CRF 28（高质量）', value: '28' },
+          { key: '26', label: 'CRF 26（极致质量）', value: '26' }
         ]
       }
     }
@@ -48,9 +58,16 @@ export const codecMatrix = {
         label: 'x265（CPU）',
         baseArgs: ['-c:v', 'libx265'],
         presets: [
+          { key: 'ultrafast', label: 'Ultrafast（极速）', args: ['-preset', 'ultrafast'] },
+          { key: 'superfast', label: 'Superfast（特快）', args: ['-preset', 'superfast'] },
+          { key: 'veryfast', label: 'Veryfast（很快）', args: ['-preset', 'veryfast'] },
+          { key: 'faster', label: 'Faster（更快）', args: ['-preset', 'faster'] },
+          { key: 'fast', label: 'Fast（快速）', args: ['-preset', 'fast'] },
           { key: 'medium', label: 'Medium（默认）', args: ['-preset', 'medium'] },
           { key: 'slow', label: 'Slow（高质量）', args: ['-preset', 'slow'] },
-          { key: 'veryslow', label: 'Very Slow（极致质量）', args: ['-preset', 'veryslow'] }
+          { key: 'slower', label: 'Slower（更慢）', args: ['-preset', 'slower'] },
+          { key: 'veryslow', label: 'Veryslow（极慢）', args: ['-preset', 'veryslow'] },
+          { key: 'placebo', label: 'Placebo（极致）', args: ['-preset', 'placebo'] }
         ],
         profiles: [
           {
@@ -66,12 +83,22 @@ export const codecMatrix = {
             args: ['-profile:v', 'main10', '-pix_fmt', 'yuv420p10le'],
             defaultPreset: 'slow',
             defaultCrf: '20'
+          },
+          {
+            key: 'still',
+            label: 'Main Still Picture',
+            args: ['-profile:v', 'mainstillpicture', '-pix_fmt', 'yuv420p'],
+            defaultPreset: 'slower',
+            defaultCrf: '18'
           }
         ],
         crfOptions: [
+          { key: '28', label: 'CRF 28（极速）', value: '28' },
           { key: '26', label: 'CRF 26（快速）', value: '26' },
           { key: '24', label: 'CRF 24（均衡）', value: '24' },
-          { key: '20', label: 'CRF 20（高质量）', value: '20' }
+          { key: '22', label: 'CRF 22（高质量）', value: '22' },
+          { key: '20', label: 'CRF 20（更高质量）', value: '20' },
+          { key: '18', label: 'CRF 18（极致质量）', value: '18' }
         ]
       },
       hevc_nvenc: {
@@ -148,6 +175,8 @@ export const codecMatrix = {
         qualityFlag: '-global_quality',
         presets: [
           { key: 'veryfast', label: 'Veryfast（最快）', args: ['-preset', 'veryfast'] },
+          { key: 'faster', label: 'Faster（更快）', args: ['-preset', 'faster'] },
+          { key: 'fast', label: 'Fast（快速）', args: ['-preset', 'fast'] },
           { key: 'medium', label: 'Medium（均衡）', args: ['-preset', 'medium'] },
           { key: 'slow', label: 'Slow（高质量）', args: ['-preset', 'slow'] }
         ],
@@ -165,6 +194,13 @@ export const codecMatrix = {
             args: ['-profile:v', 'main10', '-pix_fmt', 'p010le'],
             defaultPreset: 'slow',
             defaultCrf: '24'
+          },
+          {
+            key: 'main422',
+            label: 'Main422（4:2:2）',
+            args: ['-profile:v', 'main422_10', '-pix_fmt', 'p210le'],
+            defaultPreset: 'slow',
+            defaultCrf: '22'
           }
         ],
         crfOptions: [
@@ -216,9 +252,15 @@ export const codecMatrix = {
         baseArgs: ['-c:v', 'libx264'],
         presets: [
           { key: 'ultrafast', label: 'Ultrafast（极速）', args: ['-preset', 'ultrafast'] },
+          { key: 'superfast', label: 'Superfast（特快）', args: ['-preset', 'superfast'] },
           { key: 'veryfast', label: 'Veryfast（快速）', args: ['-preset', 'veryfast'] },
-          { key: 'faster', label: 'Faster（均衡）', args: ['-preset', 'faster'] },
-          { key: 'slow', label: 'Slow（高质量）', args: ['-preset', 'slow'] }
+          { key: 'faster', label: 'Faster（较快）', args: ['-preset', 'faster'] },
+          { key: 'fast', label: 'Fast（均衡）', args: ['-preset', 'fast'] },
+          { key: 'medium', label: 'Medium（默认）', args: ['-preset', 'medium'] },
+          { key: 'slow', label: 'Slow（高质量）', args: ['-preset', 'slow'] },
+          { key: 'slower', label: 'Slower（更慢）', args: ['-preset', 'slower'] },
+          { key: 'veryslow', label: 'Veryslow（存档）', args: ['-preset', 'veryslow'] },
+          { key: 'placebo', label: 'Placebo（极致）', args: ['-preset', 'placebo'] }
         ],
         profiles: [
           {
@@ -241,13 +283,30 @@ export const codecMatrix = {
             args: ['-profile:v', 'high', '-pix_fmt', 'yuv420p10le'],
             defaultPreset: 'slow',
             defaultCrf: '18'
+          },
+          {
+            key: 'high10',
+            label: 'High10（10-bit）',
+            args: ['-profile:v', 'high10', '-pix_fmt', 'yuv420p10le'],
+            defaultPreset: 'slower',
+            defaultCrf: '16'
+          },
+          {
+            key: 'high444',
+            label: 'High444（4:4:4）',
+            args: ['-profile:v', 'high444', '-pix_fmt', 'yuv444p'],
+            defaultPreset: 'veryslow',
+            defaultCrf: '14'
           }
         ],
         crfOptions: [
+          { key: '26', label: 'CRF 26（最快）', value: '26' },
           { key: '24', label: 'CRF 24（快速）', value: '24' },
           { key: '23', label: 'CRF 23（默认）', value: '23' },
           { key: '20', label: 'CRF 20（高质量）', value: '20' },
-          { key: '18', label: 'CRF 18（存档）', value: '18' }
+          { key: '18', label: 'CRF 18（存档）', value: '18' },
+          { key: '16', label: 'CRF 16（高保真）', value: '16' },
+          { key: '14', label: 'CRF 14（极致质量）', value: '14' }
         ]
       },
       h264_nvenc: {
@@ -338,6 +397,8 @@ export const codecMatrix = {
         qualityFlag: '-global_quality',
         presets: [
           { key: 'veryfast', label: 'Veryfast（最快）', args: ['-preset', 'veryfast'] },
+          { key: 'faster', label: 'Faster（更快）', args: ['-preset', 'faster'] },
+          { key: 'fast', label: 'Fast（快速）', args: ['-preset', 'fast'] },
           { key: 'medium', label: 'Medium（均衡）', args: ['-preset', 'medium'] },
           { key: 'slow', label: 'Slow（高质量）', args: ['-preset', 'slow'] }
         ],
@@ -419,9 +480,15 @@ export const codecMatrix = {
         label: 'libvpx-vp9（CPU）',
         baseArgs: ['-c:v', 'libvpx-vp9'],
         presets: [
+          { key: 'cpu-8', label: 'CPU 8（极速）', args: ['-cpu-used', '8', '-row-mt', '1'] },
+          { key: 'cpu-7', label: 'CPU 7（更快）', args: ['-cpu-used', '7', '-row-mt', '1'] },
           { key: 'cpu-6', label: 'CPU 6（最快）', args: ['-cpu-used', '6', '-row-mt', '1'] },
+          { key: 'cpu-5', label: 'CPU 5（很快）', args: ['-cpu-used', '5', '-row-mt', '1'] },
           { key: 'cpu-4', label: 'CPU 4（均衡）', args: ['-cpu-used', '4', '-row-mt', '1'] },
-          { key: 'cpu-2', label: 'CPU 2（高质量）', args: ['-cpu-used', '2', '-row-mt', '1'] }
+          { key: 'cpu-3', label: 'CPU 3（较慢）', args: ['-cpu-used', '3', '-row-mt', '1'] },
+          { key: 'cpu-2', label: 'CPU 2（高质量）', args: ['-cpu-used', '2', '-row-mt', '1'] },
+          { key: 'cpu-1', label: 'CPU 1（更高质量）', args: ['-cpu-used', '1', '-row-mt', '1'] },
+          { key: 'cpu-0', label: 'CPU 0（极致质量）', args: ['-cpu-used', '0', '-row-mt', '1'] }
         ],
         profiles: [
           {
@@ -437,27 +504,58 @@ export const codecMatrix = {
             args: ['-profile:v', '2', '-pix_fmt', 'yuv420p10le'],
             defaultPreset: 'cpu-2',
             defaultCrf: '30'
+          },
+          {
+            key: 'profile3',
+            label: 'Profile 3（4:4:4）',
+            args: ['-profile:v', '3', '-pix_fmt', 'yuv444p'],
+            defaultPreset: 'cpu-2',
+            defaultCrf: '28'
           }
         ],
         crfOptions: [
           { key: '38', label: 'CRF 38（最快）', value: '38' },
           { key: '34', label: 'CRF 34（均衡）', value: '34' },
-          { key: '30', label: 'CRF 30（高质量）', value: '30' }
+          { key: '30', label: 'CRF 30（高质量）', value: '30' },
+          { key: '28', label: 'CRF 28（极致质量）', value: '28' }
         ]
       }
     }
   }
 };
 
-function collectPresetArgs(encoder, profile, preset, crf) {
-  const qualityFlag = encoder.qualityFlag ?? DEFAULT_QUALITY_FLAG;
-  const qualityArgs = crf?.value && qualityFlag ? [qualityFlag, crf.value] : [];
-  return [
+function collectPresetArgs(encoder, profile, preset, quality) {
+  const args = [
     ...(encoder.baseArgs ?? []),
     ...(profile?.args ?? []),
-    ...(preset?.args ?? []),
-    ...qualityArgs
+    ...(preset?.args ?? [])
   ];
+  if (!quality) {
+    const qualityFlag = encoder.qualityFlag ?? DEFAULT_QUALITY_FLAG;
+    if (qualityFlag && profile?.defaultCrf) {
+      args.push(qualityFlag, profile.defaultCrf);
+    }
+    return args;
+  }
+  if (quality.mode === 'bitrate' && quality.bitrateKbps) {
+    const bitrateValue = `${quality.bitrateKbps}k`;
+    args.push('-b:v', bitrateValue);
+    if (quality.maxrateKbps) {
+      args.push('-maxrate', `${quality.maxrateKbps}k`);
+    }
+    if (quality.bufsizeKbps) {
+      args.push('-bufsize', `${quality.bufsizeKbps}k`);
+    }
+    if (quality.minrateKbps) {
+      args.push('-minrate', `${quality.minrateKbps}k`);
+    }
+    return args;
+  }
+  const qualityFlag = encoder.qualityFlag ?? DEFAULT_QUALITY_FLAG;
+  if (qualityFlag && quality.value) {
+    args.push(qualityFlag, quality.value);
+  }
+  return args;
 }
 
 /**
@@ -477,7 +575,8 @@ export const videoPresets = Object.fromEntries(
         const defaultCrfKey = profile.defaultCrf ?? crfEntries[0]?.key;
         presets.forEach((preset) => {
           crfEntries.forEach((crf) => {
-            const args = collectPresetArgs(encoder, profile, preset, crf);
+            const quality = { mode: 'crf', value: crf.value };
+            const args = collectPresetArgs(encoder, profile, preset, quality);
             const key = `${codecKey}:${encoderKey}:${profile.key}:${preset.key}:${crf.key}`;
             combinations.push([
               key,
@@ -502,7 +601,7 @@ export const videoPresets = Object.fromEntries(
   )
 );
 
-export function buildVideoArgs(codecKey, encoderKey, profileKey, presetKey, crfKey) {
+export function buildVideoArgs(codecKey, encoderKey, profileKey, presetKey, crfKey, qualityOverride) {
   const codec = codecMatrix[codecKey];
   if (!codec) {
     return null;
@@ -528,6 +627,9 @@ export function buildVideoArgs(codecKey, encoderKey, profileKey, presetKey, crfK
   const preset = presetCandidateKey
     ? presets.find((item) => item.key === presetCandidateKey) ?? presets[0]
     : presets[0];
+  if (qualityOverride) {
+    return collectPresetArgs(encoder, profile, preset, qualityOverride);
+  }
   const crfOptions = encoder.crfOptions ?? [];
   const crfCandidateKey = crfKey ?? profile.defaultCrf ?? crfOptions[0]?.key;
   const crf = crfCandidateKey
@@ -536,7 +638,7 @@ export function buildVideoArgs(codecKey, encoderKey, profileKey, presetKey, crfK
   if (!crf) {
     return null;
   }
-  return collectPresetArgs(encoder, profile, preset, crf);
+  return collectPresetArgs(encoder, profile, preset, { mode: 'crf', value: crf.value });
 }
 
 export function codecOptions(options = {}) {
@@ -572,6 +674,18 @@ export function codecOptions(options = {}) {
       };
     })
   }));
+}
+
+export const resolutionOptions = [
+  { key: 'source', label: '保持原始分辨率', width: null, height: null },
+  { key: '1080p', label: '1080p（1920×1080）', width: 1920, height: 1080 },
+  { key: '720p', label: '720p（1280×720）', width: 1280, height: 720 },
+  { key: '480p', label: '480p（854×480）', width: 854, height: 480 },
+  { key: '360p', label: '360p（640×360）', width: 640, height: 360 }
+];
+
+export function getResolutionPreset(key) {
+  return resolutionOptions.find((item) => item.key === key) ?? resolutionOptions[0];
 }
 
 /**

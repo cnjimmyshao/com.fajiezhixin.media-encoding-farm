@@ -23,12 +23,24 @@ function assertJob(job, res) {
 
 router.post('/jobs', async (req, res, next) => {
   try {
-    const { inputPath, outputPath, codec, impl, params = {} } = req.body ?? {};
+    const { inputPath, outputPath, codec, impl } = req.body ?? {};
+    let params = req.body?.params ?? {};
     if (!inputPath || !outputPath || !codec || !impl) {
       res.status(400).json({ error: '缺少必要参数' });
       return;
     }
-    const job = await createJob({ inputPath, outputPath, codec, impl, params });
+    params = normalizeJobParams(params);
+    if (params.error) {
+      res.status(400).json({ error: params.error });
+      return;
+    }
+    const job = await createJob({
+      inputPath,
+      outputPath,
+      codec,
+      impl,
+      params
+    });
     res.status(201).json(job);
   } catch (error) {
     next(error);
@@ -89,3 +101,33 @@ router.post('/jobs/:id/retry', async (req, res, next) => {
 });
 
 export default router;
+
+function normalizeJobParams(rawParams = {}) {
+  const params = { ...rawParams };
+  params.scale = params.scale || 'source';
+  const qualityMode = params.qualityMode === 'bitrate' ? 'bitrate' : 'crf';
+  params.qualityMode = qualityMode;
+  if (qualityMode === 'bitrate') {
+    const bitrate = Number(params.bitrateKbps);
+    if (!Number.isFinite(bitrate) || bitrate <= 0) {
+      return { error: '码率模式需要输入有效的码率（Kbps）' };
+    }
+    params.bitrateKbps = Math.round(bitrate);
+  } else if (!params.crf) {
+    return { error: 'CRF 模式需要选择 CRF 值' };
+  } else {
+    delete params.bitrateKbps;
+  }
+  const vmafMin = Number(params.vmafMin);
+  const vmafMax = Number(params.vmafMax);
+  if (Number.isFinite(vmafMin) && Number.isFinite(vmafMax) && vmafMin >= 0 && vmafMax <= 100 && vmafMin <= vmafMax) {
+    params.vmafMin = vmafMin;
+    params.vmafMax = vmafMax;
+    params.enableVmaf = true;
+  } else {
+    delete params.vmafMin;
+    delete params.vmafMax;
+  }
+  params.enableVmaf = Boolean(params.enableVmaf);
+  return params;
+}
