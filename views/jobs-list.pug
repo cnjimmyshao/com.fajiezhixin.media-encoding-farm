@@ -1,0 +1,29 @@
+extends layout
+
+block content
+  h2 任务列表
+  if jobs.length
+    table
+      thead
+        tr
+          th 状态
+          th 进度
+          th 输入
+          th 输出
+          th 创建时间
+          th 操作
+      tbody
+        each job in jobs
+          tr
+            td
+              span(class=`badge ${job.status}`)= job.status
+            td
+              .progress
+                span(style=`width: ${job.progress || 0}%`)
+            td= job.input_path
+            td= job.output_path
+            td= formatDate(job.created_at)
+            td
+              a(href=`/jobs/${job.id}`) 查看详情
+  else
+    div.empty-state 当前没有任务，点击上方“新建任务”开始。
