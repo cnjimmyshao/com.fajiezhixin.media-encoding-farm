@@ -110,6 +110,11 @@ dist
 # Serverless directories
 .serverless/
 
+# Sqlite database files
+*.db
+*.sqlite
+*.sqlite3
+
 # FuseBox cache
 .fusebox/
 
