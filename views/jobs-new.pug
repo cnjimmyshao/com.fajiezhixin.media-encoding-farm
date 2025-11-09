@@ -14,7 +14,7 @@ block content
       div(id="codecOptions", class="radio-group")
         each codec, index in codecOptions
           label(class="radio-option")
-            input(type="radio", name="codec", value=codec.key, required=index === 0)
+            input(type="radio", name="codec", value=codec.key, required=index === 0, checked=index === 0)
             span= codec.label
 
     fieldset
@@ -23,9 +23,21 @@ block content
         p(class="radio-placeholder") 请选择编码器
 
     fieldset
-      legend 预设 / Profile
+      legend 质量（CRF）
+      div(id="crfOptions", class="radio-group")
+        p(class="radio-placeholder") 请选择 CRF 值
+
+    fieldset
+      legend 编码预设 / Profile
       div(id="profileOptions", class="radio-group")
         p(class="radio-placeholder") 请选择预设
+
+    fieldset
+      legend 可选分析
+      label(class="checkbox-option")
+        input(type="checkbox", id="enableVmaf", name="enableVmaf")
+        span 启用 VMAF 质量评估
+      p(class="field-hint") 选择后将在任务完成后运行 VMAF 评估，可能增加额外耗时。
 
     button(type="submit") 提交任务
   p#form-message
@@ -38,22 +50,25 @@ block content
     const codecOptionsContainer = document.getElementById('codecOptions');
     const encoderOptionsContainer = document.getElementById('encoderOptions');
     const profileOptionsContainer = document.getElementById('profileOptions');
+    const crfOptionsContainer = document.getElementById('crfOptions');
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
       acc[codec.key] = codec;
       return acc;
     }, {});
 
-    function fillRadioGroup(container, name, items, placeholder) {
+    function fillRadioGroup(container, name, items, placeholder, selectedValue) {
       container.innerHTML = '';
-      if (items.length === 0) {
+      if (!items || items.length === 0) {
         const placeholderEl = document.createElement('p');
         placeholderEl.className = 'radio-placeholder';
         placeholderEl.textContent = placeholder;
         container.appendChild(placeholderEl);
-        return;
+        return null;
       }
 
+      let selected = null;
+      let requiredAssigned = false;
       items.forEach((item, index) => {
         const label = document.createElement('label');
         label.className = 'radio-option';
@@ -62,8 +77,15 @@ block content
         input.type = 'radio';
         input.name = name;
         input.value = item.key;
-        if (index === 0) {
+        if (!requiredAssigned) {
           input.required = true;
+          requiredAssigned = true;
+        }
+
+        const shouldCheck = selectedValue ? item.key === selectedValue : index === 0;
+        if (shouldCheck) {
+          input.checked = true;
+          selected = item.key;
         }
 
         const text = document.createElement('span');
@@ -73,6 +95,80 @@ block content
         label.appendChild(text);
         container.appendChild(label);
       });
+
+      if (!selected) {
+        const firstInput = container.querySelector('input');
+        if (firstInput) {
+          firstInput.checked = true;
+          selected = firstInput.value;
+        }
+      }
+
+      return selected;
+    }
+
+    function getEncoderConfig(codecKey, encoderKey) {
+      const codec = codecMap[codecKey];
+      if (!codec) {
+        return null;
+      }
+      return codec.encoders.find((item) => item.key === encoderKey) ?? null;
+    }
+
+    function determineCrfSelection(encoder, profileKey) {
+      if (!encoder) {
+        return null;
+      }
+      const profile = encoder.profiles.find((item) => item.key === profileKey);
+      if (!profile || !profile.defaultCrf) {
+        return null;
+      }
+      return encoder.crfOptions.some((item) => item.key === profile.defaultCrf)
+        ? profile.defaultCrf
+        : null;
+    }
+
+    function updateProfileAndCrf(codecKey, encoderKey, selectedProfileKey, selectedCrfKey) {
+      const encoder = getEncoderConfig(codecKey, encoderKey);
+      if (!encoder) {
+        fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择预设');
+        fillRadioGroup(crfOptionsContainer, 'crf', [], '请选择 CRF 值');
+        return;
+      }
+
+      const profileSelection = fillRadioGroup(
+        profileOptionsContainer,
+        'profile',
+        encoder.profiles,
+        '请选择预设',
+        selectedProfileKey
+      );
+
+      const preferredCrf = selectedCrfKey ?? determineCrfSelection(encoder, profileSelection);
+      fillRadioGroup(
+        crfOptionsContainer,
+        'crf',
+        encoder.crfOptions,
+        '请选择 CRF 值',
+        preferredCrf
+      );
+    }
+
+    function updateEncoderOptions(codecKey) {
+      const codec = codecMap[codecKey];
+      const encoders = codec ? codec.encoders : [];
+      const encoderSelection = fillRadioGroup(
+        encoderOptionsContainer,
+        'impl',
+        encoders,
+        '请选择编码器'
+      );
+      if (encoderSelection) {
+        updateProfileAndCrf(codecKey, encoderSelection);
+      } else {
+        fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择预设');
+        fillRadioGroup(crfOptionsContainer, 'crf', [], '请选择 CRF 值');
+      }
     }
 
     codecOptionsContainer.addEventListener('change', (event) => {
@@ -80,10 +176,7 @@ block content
         return;
       }
 
-      const selectedCodec = codecMap[event.target.value];
-      const encoders = selectedCodec ? selectedCodec.encoders : [];
-      fillRadioGroup(encoderOptionsContainer, 'impl', encoders, '请选择编码器');
-      fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择预设');
+      updateEncoderOptions(event.target.value);
     });
 
     encoderOptionsContainer.addEventListener('change', (event) => {
@@ -91,12 +184,38 @@ block content
         return;
       }
 
-      const codecKey = form.elements.codec.value;
-      const codec = codecMap[codecKey];
-      const encoder = codec?.encoders.find((item) => item.key === event.target.value);
-      const profiles = encoder ? encoder.profiles : [];
-      fillRadioGroup(profileOptionsContainer, 'profile', profiles, '请选择预设');
+      const codecKey = form.elements.codec?.value;
+      if (!codecKey) {
+        return;
+      }
+      updateProfileAndCrf(codecKey, event.target.value);
     });
+
+    profileOptionsContainer.addEventListener('change', (event) => {
+      if (event.target.name !== 'profile') {
+        return;
+      }
+
+      const codecKey = form.elements.codec?.value;
+      const encoderKey = form.elements.impl?.value;
+      if (!codecKey || !encoderKey) {
+        return;
+      }
+      const encoder = getEncoderConfig(codecKey, encoderKey);
+      const crfKey = determineCrfSelection(encoder, event.target.value);
+      if (!crfKey) {
+        return;
+      }
+      const crfInput = crfOptionsContainer.querySelector(`input[name="crf"][value="${crfKey}"]`);
+      if (crfInput) {
+        crfInput.checked = true;
+      }
+    });
+
+    const initialCodecInput = codecOptionsContainer.querySelector('input[name="codec"]:checked');
+    if (initialCodecInput) {
+      updateEncoderOptions(initialCodecInput.value);
+    }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -105,17 +224,19 @@ block content
       const codec = formData.get('codec');
       const impl = formData.get('impl');
       const profile = formData.get('profile');
-      if (!codec || !impl || !profile) {
-        message.textContent = '请选择完整的编码、编码器与预设';
+      const crf = formData.get('crf');
+      if (!codec || !impl || !profile || !crf) {
+        message.textContent = '请选择完整的编码、编码器、Profile 与 CRF';
         return;
       }
-      const presetKey = `${codec}:${impl}:${profile}`;
+      const presetKey = `${codec}:${impl}:${profile}:${crf}`;
+      const enableVmaf = formData.get('enableVmaf') === 'on';
       const payload = {
         inputPath: formData.get('inputPath'),
         outputPath: formData.get('outputPath'),
         codec,
         impl,
-        params: { presetKey, profile }
+        params: { presetKey, profile, crf, enableVmaf }
       };
       const res = await fetch('/api/jobs', {
         method: 'POST',

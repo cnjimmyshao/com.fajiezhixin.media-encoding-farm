@@ -2,12 +2,14 @@
  * @file 启动前的数据库检查
  * @description 如缺失 vef.db 则触发迁移脚本
  */
-import { access } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { access, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import envConfig from '../config/env.mjs';
 
-const dbPath = resolve('./vef.db');
+const { dbPath } = envConfig;
 
 export async function ensureDatabase() {
+  await mkdir(dirname(dbPath), { recursive: true });
   try {
     await access(dbPath);
     return;

@@ -13,12 +13,19 @@ if (!entry) {
   process.exit(1);
 }
 
-try {
-  await access('.env');
-  process.loadEnvFile('.env');
-} catch (error) {
-  if (error.code !== 'ENOENT') {
-    throw error;
+const envFiles = [
+  { name: '.env.example', override: false },
+  { name: '.env', override: true }
+];
+
+for (const { name, override } of envFiles) {
+  try {
+    await access(name);
+    process.loadEnvFile(name, { override });
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
   }
 }
 
