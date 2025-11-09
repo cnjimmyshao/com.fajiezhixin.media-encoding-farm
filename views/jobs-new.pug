@@ -1,0 +1,48 @@
+extends layout
+
+block content
+  h2 新建任务
+  form(id="job-form")
+    label(for="inputPath") 输入文件绝对路径
+    input(type="text", id="inputPath", name="inputPath", required)
+
+    label(for="outputPath") 输出文件绝对路径
+    input(type="text", id="outputPath", name="outputPath", required)
+
+    label(for="presetKey") 预设
+    select(id="presetKey", name="presetKey")
+      each preset in presets
+        option(value=preset.key)= preset.label
+
+    button(type="submit") 提交任务
+  p#form-message
+
+  script.
+    const form = document.getElementById('job-form');
+    const message = document.getElementById('form-message');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      message.textContent = '正在提交...';
+      const formData = new FormData(form);
+      const presetKey = formData.get('presetKey');
+      const [codec, impl] = presetKey.split(':');
+      const payload = {
+        inputPath: formData.get('inputPath'),
+        outputPath: formData.get('outputPath'),
+        codec,
+        impl,
+        params: { presetKey }
+      };
+      const res = await fetch('/api/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const job = await res.json();
+        window.location.href = `/jobs/${job.id}`;
+      } else {
+        const error = await res.json().catch(() => ({ error: '提交失败' }));
+        message.textContent = error.error || '提交失败';
+      }
+    });

@@ -1,0 +1,85 @@
+extends layout
+
+block content
+  if !job
+    h2 任务不存在
+    p 返回
+      a(href="/jobs") 任务列表
+  else
+    h2 任务详情
+    dl
+      dt 状态
+      dd
+        span(class=`badge ${job.status}`)= job.status
+      dt 进度
+      dd
+        .progress
+          span#progress-bar(style=`width: ${job.progress || 0}%`)
+        span#progress-text= `${job.progress || 0}%`
+      dt 输入文件
+      dd= job.input_path
+      dt 输出文件
+      dd= job.output_path
+      dt 创建时间
+      dd= formatDate(job.created_at)
+      dt 更新时间
+      dd#updated-at= formatDate(job.updated_at)
+      if job.error_msg
+        dt 错误信息
+        dd#job-error= job.error_msg
+      if job.metrics
+        dt 指标
+        dd
+          pre= JSON.stringify(job.metrics, null, 2)
+    div
+      if job.status === 'running'
+        button(type='button', id='cancel-btn') 取消任务
+      if job.status === 'failed' || job.status === 'canceled'
+        button(type='button', id='retry-btn') 重试任务
+    script.
+      const jobId = '!{job.id}';
+      const progressBar = document.getElementById('progress-bar');
+      const progressText = document.getElementById('progress-text');
+      const updatedAt = document.getElementById('updated-at');
+      const errorEl = document.getElementById('job-error');
+      const cancelBtn = document.getElementById('cancel-btn');
+      const retryBtn = document.getElementById('retry-btn');
+
+      async function refresh() {
+        const res = await fetch(`/api/jobs/${jobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        progressBar.style.width = `${data.progress || 0}%`;
+        progressText.textContent = `${data.progress || 0}%`;
+        updatedAt.textContent = data.updated_at ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(data.updated_at)) : '';
+        document.querySelector('.badge').textContent = data.status;
+        document.querySelector('.badge').className = `badge ${data.status}`;
+        if (data.error_msg) {
+          if (errorEl) {
+            errorEl.textContent = data.error_msg;
+          } else {
+            const dt = document.createElement('dt');
+            dt.textContent = '错误信息';
+            const dd = document.createElement('dd');
+            dd.id = 'job-error';
+            dd.textContent = data.error_msg;
+            document.querySelector('dl').append(dt, dd);
+          }
+        }
+      }
+
+      async function postAction(path) {
+        const res = await fetch(path, { method: 'POST' });
+        if (res.ok) {
+          await refresh();
+        }
+      }
+
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => postAction(`/api/jobs/${jobId}/cancel`));
+      }
+      if (retryBtn) {
+        retryBtn.addEventListener('click', () => postAction(`/api/jobs/${jobId}/retry`));
+      }
+
+      setInterval(refresh, 3000);

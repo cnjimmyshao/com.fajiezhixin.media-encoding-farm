@@ -1,0 +1,15 @@
+{
+  "name": "encoding-farm",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env app.mjs",
+    "dev": "NODE_ENV=development node --env-file=.env app.mjs",
+    "migrate": "node --env-file=.env src/db/migrate.mjs"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "pug": "^3.0.2",
+    "morgan": "^1.10.0"
+  }
+}
