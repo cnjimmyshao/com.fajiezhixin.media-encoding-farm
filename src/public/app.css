@@ -77,13 +77,66 @@ label {
   font-weight: 600;
 }
 
-input, select {
+input[type="text"], select {
   width: 100%;
   padding: 0.5rem;
   margin-bottom: 1rem;
   border: 1px solid #cbd5f5;
   border-radius: 0.25rem;
   font-size: 1rem;
+}
+
+fieldset {
+  border: none;
+  margin: 0 0 1rem 0;
+  padding: 0;
+}
+
+legend {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.radio-group {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.radio-option input {
+  width: auto;
+  margin: 0;
+}
+
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.checkbox-option input {
+  width: auto;
+  margin: 0;
+}
+
+.field-hint {
+  color: #64748b;
+  font-size: 0.9rem;
+  margin: 0 0 1rem 1.5rem;
+}
+
+.radio-placeholder {
+  color: #64748b;
+  font-size: 0.95rem;
 }
 
 button {
