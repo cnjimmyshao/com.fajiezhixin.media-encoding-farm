@@ -9,29 +9,91 @@ block content
     label(for="outputPath") 输出文件绝对路径
     input(type="text", id="outputPath", name="outputPath", required)
 
-    label(for="presetKey") 预设
-    select(id="presetKey", name="presetKey")
-      each preset in presets
-        option(value=preset.key)= preset.label
+    label(for="codecSelect") 编码格式
+    select(id="codecSelect", name="codec", required)
+      option(value="" disabled selected) 请选择编码格式
+      each codec in codecOptions
+        option(value=codec.key)= codec.label
+
+    label(for="encoderSelect") 编码器
+    select(id="encoderSelect", name="impl", disabled required)
+      option(value="" disabled selected) 请选择编码器
+
+    label(for="profileSelect") 预设 / Profile
+    select(id="profileSelect", name="profile", disabled required)
+      option(value="" disabled selected) 请选择预设
 
     button(type="submit") 提交任务
   p#form-message
 
+  script(type="application/json", id="codec-options-data").
+    !{JSON.stringify(codecOptions)}
   script.
     const form = document.getElementById('job-form');
     const message = document.getElementById('form-message');
+    const codecSelect = document.getElementById('codecSelect');
+    const encoderSelect = document.getElementById('encoderSelect');
+    const profileSelect = document.getElementById('profileSelect');
+    const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
+    const codecMap = codecOptionsData.reduce((acc, codec) => {
+      acc[codec.key] = codec;
+      return acc;
+    }, {});
+
+    function resetSelect(select, placeholder) {
+      select.innerHTML = '';
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = placeholder;
+      option.disabled = true;
+      option.selected = true;
+      select.appendChild(option);
+    }
+
+    function fillSelect(select, items, placeholder) {
+      resetSelect(select, placeholder);
+      items.forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item.key;
+        option.textContent = item.label;
+        select.appendChild(option);
+      });
+      select.disabled = items.length === 0;
+    }
+
+    codecSelect.addEventListener('change', () => {
+      const selectedCodec = codecMap[codecSelect.value];
+      const encoders = selectedCodec ? selectedCodec.encoders : [];
+      fillSelect(encoderSelect, encoders, '请选择编码器');
+      fillSelect(profileSelect, [], '请选择预设');
+      profileSelect.disabled = true;
+    });
+
+    encoderSelect.addEventListener('change', () => {
+      const codec = codecMap[codecSelect.value];
+      const encoder = codec?.encoders.find((item) => item.key === encoderSelect.value);
+      const profiles = encoder ? encoder.profiles : [];
+      fillSelect(profileSelect, profiles, '请选择预设');
+    });
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       message.textContent = '正在提交...';
       const formData = new FormData(form);
-      const presetKey = formData.get('presetKey');
-      const [codec, impl] = presetKey.split(':');
+      const codec = formData.get('codec');
+      const impl = formData.get('impl');
+      const profile = formData.get('profile');
+      if (!codec || !impl || !profile) {
+        message.textContent = '请选择完整的编码、编码器与预设';
+        return;
+      }
+      const presetKey = `${codec}:${impl}:${profile}`;
       const payload = {
         inputPath: formData.get('inputPath'),
         outputPath: formData.get('outputPath'),
         codec,
         impl,
-        params: { presetKey }
+        params: { presetKey, profile }
       };
       const res = await fetch('/api/jobs', {
         method: 'POST',

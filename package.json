@@ -1,11 +1,12 @@
 {
   "name": "encoding-farm",
   "version": "0.1.0",
+  "packageManager": "pnpm@10.19.0",
   "type": "module",
   "scripts": {
-    "start": "node --env-file=.env app.mjs",
-    "dev": "NODE_ENV=development node --env-file=.env app.mjs",
-    "migrate": "node --env-file=.env src/db/migrate.mjs"
+    "start": "node --experimental-sqlite scripts/run-with-env.mjs scripts/boot-app.mjs",
+    "dev": "NODE_ENV=development node --experimental-sqlite scripts/run-with-env.mjs scripts/boot-app.mjs",
+    "migrate": "node --experimental-sqlite scripts/run-with-env.mjs src/db/migrate.mjs"
   },
   "dependencies": {
     "express": "^5.0.0",

@@ -4,7 +4,7 @@
  */
 import { Router } from 'express';
 import { listJobs, getJobById } from '../controllers/jobs.mjs';
-import { videoPresets } from '../services/presets.mjs';
+import { codecOptions } from '../services/presets.mjs';
 
 const router = Router();
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -32,10 +32,7 @@ router.get('/jobs', async (req, res, next) => {
 router.get('/jobs/new', (req, res) => {
   res.render('jobs-new', {
     title: '新建任务',
-    presets: Object.entries(videoPresets).map(([key, preset]) => ({
-      key,
-      label: preset.label
-    }))
+    codecOptions: codecOptions()
   });
 });
 
