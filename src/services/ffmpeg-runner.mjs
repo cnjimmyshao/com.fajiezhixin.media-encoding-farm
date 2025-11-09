@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { stat } from 'node:fs/promises';
-import { audioArgs, videoPresets } from './presets.mjs';
+import { audioArgs, buildVideoArgs, videoPresets } from './presets.mjs';
 import { updateJob } from '../controllers/jobs.mjs';
 
 const runningChildren = new Map();
@@ -60,17 +60,23 @@ export async function probeDuration(ffprobeBin, inputPath) {
 export async function runJob(job, durationSec, config) {
   await updateJob(job.id, { status: 'running', progress: 0, error_msg: null });
 
-  const presetKey = job.params?.presetKey ?? `${job.codec}:${job.impl}:baseline`;
-  const preset = videoPresets[presetKey];
   const ffmpegArgs = ['-y', '-i', job.input_path];
-  if (preset) {
-    ffmpegArgs.push(...preset.args);
+  const videoArgs = buildVideoArgs(job.codec, job.impl, job.params?.profile, job.params?.crf);
+  if (videoArgs) {
+    ffmpegArgs.push(...videoArgs);
+  } else {
+    const presetKey = job.params?.presetKey ?? `${job.codec}:${job.impl}:baseline`;
+    const preset = videoPresets[presetKey];
+    if (preset) {
+      ffmpegArgs.push(...preset.args);
+    }
   }
   if (job.params?.extraArgs && Array.isArray(job.params.extraArgs)) {
     ffmpegArgs.push(...job.params.extraArgs);
   }
   ffmpegArgs.push(...audioArgs(), job.output_path);
 
+  const startTime = Date.now();
   const child = spawn(config.ffmpeg.bin, ffmpegArgs, {
     stdio: ['ignore', 'ignore', 'pipe']
   });
@@ -131,10 +137,23 @@ export async function runJob(job, durationSec, config) {
   if (code === 0) {
     try {
       const fileStat = await stat(job.output_path);
+      const encodeDurationSec = Number(((Date.now() - startTime) / 1000).toFixed(3));
+      const metrics = { sizeBytes: fileStat.size, encodeDurationSec };
+      if (typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0) {
+        metrics.encodeEfficiency = Number((encodeDurationSec / durationSec).toFixed(3));
+      }
+      if (job.params?.enableVmaf) {
+        try {
+          const vmafScore = await computeVmafScore(config.ffmpeg.bin, job.output_path, job.input_path);
+          metrics.vmafScore = Number(vmafScore.toFixed(3));
+        } catch (error) {
+          metrics.vmafError = error.message;
+        }
+      }
       await updateJob(job.id, {
         status: 'success',
         progress: 100,
-        metrics_json: { sizeBytes: fileStat.size }
+        metrics_json: metrics
       });
     } catch (error) {
       await updateJob(job.id, {
@@ -163,4 +182,35 @@ export function cancelRunningJob(jobId) {
     return true;
   }
   return false;
+}
+
+async function computeVmafScore(ffmpegBin, distortedPath, referencePath) {
+  const filterGraph = '[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:log_fmt=json';
+  const args = [
+    '-i',
+    distortedPath,
+    '-i',
+    referencePath,
+    '-lavfi',
+    filterGraph,
+    '-f',
+    'null',
+    '-'
+  ];
+  const child = spawn(ffmpegBin, args, {
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk.toString();
+  });
+  const [code] = await once(child, 'close');
+  if (code !== 0) {
+    throw new Error(`VMAF 计算失败，退出码 ${code}`);
+  }
+  const match = /VMAF score = ([0-9.]+)/.exec(stderr);
+  if (!match) {
+    throw new Error('未能解析 VMAF 结果');
+  }
+  return Number(match[1]);
 }

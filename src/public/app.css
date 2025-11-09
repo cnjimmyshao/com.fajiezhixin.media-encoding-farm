@@ -115,6 +115,25 @@ legend {
   margin: 0;
 }
 
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.checkbox-option input {
+  width: auto;
+  margin: 0;
+}
+
+.field-hint {
+  color: #64748b;
+  font-size: 0.9rem;
+  margin: 0 0 1rem 1.5rem;
+}
+
 .radio-placeholder {
   color: #64748b;
   font-size: 0.95rem;

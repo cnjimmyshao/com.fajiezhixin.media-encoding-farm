@@ -2,10 +2,13 @@
  * @file SQLite 打开工具
  * @description 使用 node:sqlite 提供数据库连接实例
  */
+import { mkdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { resolve } from 'node:path';
+import { dirname } from 'node:path';
+import envConfig from '../../config/env.mjs';
 
-const dbPath = resolve('./vef.db');
+const { dbPath } = envConfig;
+mkdirSync(dirname(dbPath), { recursive: true });
 
 /**
  * @description 基于 DatabaseSync 的最小异步包装，提供 run/get/all/exec
