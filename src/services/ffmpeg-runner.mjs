@@ -5,7 +5,8 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { stat } from 'node:fs/promises';
+import { stat, writeFile, mkdir } from 'node:fs/promises';
+import { dirname, basename, extname, join } from 'node:path';
 import { audioArgs, buildVideoArgs, videoPresets, getResolutionPreset } from './presets.mjs';
 import { updateJob } from '../controllers/jobs.mjs';
 
@@ -64,6 +65,11 @@ export async function probeDuration(ffprobeBin, inputPath) {
  */
 export async function runJob(job, durationSec, config) {
   await updateJob(job.id, { status: 'running', progress: 0, error_msg: null });
+
+  if (job.params?.perScene) {
+    await runPerSceneJob(job, durationSec, config);
+    return;
+  }
 
   const scalePreset = getResolutionPreset(job.params?.scale ?? 'source');
   let requestedBitrate = Number(job.params?.bitrateKbps);
@@ -148,6 +154,135 @@ export async function runJob(job, durationSec, config) {
   });
 }
 
+async function runPerSceneJob(job, durationSec, config) {
+  const scalePreset = getResolutionPreset(job.params?.scale ?? 'source');
+  const threshold = Number.isFinite(Number(job.params?.sceneThreshold))
+    ? Math.max(0.01, Math.min(1, Number(job.params.sceneThreshold)))
+    : 0.4;
+  const cuts = await detectSceneCuts(config.ffmpeg.bin, job.input_path, threshold);
+  const scenes = buildSceneTimeline(cuts, durationSec);
+  if (!scenes.length) {
+    scenes.push({ index: 1, start: 0, end: durationSec ?? 0, duration: durationSec ?? 0 });
+  }
+  const outputDir = dirname(job.output_path);
+  await mkdir(outputDir, { recursive: true });
+  const baseName = basename(job.output_path, extname(job.output_path)) || 'output';
+  const segmentsDir = join(outputDir, `${baseName}-scenes`);
+  await mkdir(segmentsDir, { recursive: true });
+  const vmafTargets = parseVmafTargets(job.params);
+  const hasValidBitrate = Number.isFinite(Number(job.params?.bitrateKbps)) && Number(job.params?.bitrateKbps) > 0;
+  const qualityMode = job.params?.qualityMode === 'bitrate' && hasValidBitrate ? 'bitrate' : 'crf';
+  let currentBitrate = qualityMode === 'bitrate'
+    ? Math.max(MIN_BITRATE_KBPS, Math.min(MAX_BITRATE_KBPS, Math.round(Number(job.params?.bitrateKbps))))
+    : null;
+  const sceneMetrics = [];
+  let processedDuration = 0;
+
+  for (const scene of scenes) {
+    const paddedIndex = String(scene.index).padStart(3, '0');
+    const segmentPath = join(segmentsDir, `scene-${paddedIndex}.mp4`);
+    const progressOffset = durationSec
+      ? (processedDuration / durationSec) * 100
+      : ((scene.index - 1) / scenes.length) * 100;
+    const progressScale = durationSec
+      ? (scene.duration / (durationSec || 1)) * 100
+      : (1 / scenes.length) * 100;
+    const result = await encodeSceneSegment(job, durationSec, config, {
+      scene,
+      targetPath: segmentPath,
+      scalePreset,
+      vmafTargets,
+      qualityMode,
+      initialBitrate: currentBitrate,
+      progressTracker: {
+        offset: progressOffset,
+        scale: progressScale,
+        duration: scene.duration
+      }
+    });
+    if (!result.success) {
+      await finalizeOnFailure(job.id, {
+        status: 'failed',
+        error: result.error || `场景 ${scene.index} 编码失败`,
+        progress: Math.floor(progressOffset)
+      });
+      return;
+    }
+    if (result.nextBitrate) {
+      currentBitrate = result.nextBitrate;
+    }
+    sceneMetrics.push({
+      index: scene.index,
+      start: scene.start,
+      end: scene.end,
+      duration: scene.duration,
+      output: segmentPath,
+      metrics: result.metrics
+    });
+    processedDuration += scene.duration;
+  }
+
+  const segmentFiles = sceneMetrics.map((item) => item.output);
+  try {
+    await concatSceneSegments(config.ffmpeg.bin, segmentFiles, job.output_path);
+  } catch (error) {
+    await finalizeOnFailure(job.id, { status: 'failed', error: `场景合并失败: ${error.message}` });
+    return;
+  }
+
+  let hlsInfo = null;
+  let dashInfo = null;
+  try {
+    hlsInfo = await generateHlsOutputs(config.ffmpeg.bin, job.output_path);
+  } catch (error) {
+    await finalizeOnFailure(job.id, { status: 'failed', error: `HLS 生成失败: ${error.message}` });
+    return;
+  }
+  try {
+    dashInfo = await generateDashOutputs(config.ffmpeg.bin, job.output_path);
+  } catch (error) {
+    await finalizeOnFailure(job.id, { status: 'failed', error: `DASH 生成失败: ${error.message}` });
+    return;
+  }
+
+  const finalStat = await stat(job.output_path);
+  const totalEncodeTime = Number(sceneMetrics
+    .reduce((acc, scene) => acc + (scene.metrics?.encodeDurationSec ?? 0), 0)
+    .toFixed(3));
+  const finalMetrics = {
+    sizeBytes: finalStat.size,
+    encodeDurationSec: totalEncodeTime,
+    encodeEfficiency: durationSec && durationSec > 0
+      ? Number((totalEncodeTime / durationSec).toFixed(3))
+      : null,
+    perScene: sceneMetrics.map((scene) => ({
+      index: scene.index,
+      start: scene.start,
+      end: scene.end,
+      duration: scene.duration,
+      usedBitrateKbps: scene.metrics?.usedBitrateKbps ?? null,
+      vmafScore: scene.metrics?.vmafScore ?? null,
+      vmafMin: scene.metrics?.vmafMin ?? null,
+      vmafMax: scene.metrics?.vmafMax ?? null,
+      vmafTuningHistory: scene.metrics?.vmafTuningHistory ?? null
+    })),
+    hlsPlaylist: hlsInfo?.playlist ?? null,
+    dashManifest: dashInfo?.manifest ?? null
+  };
+
+  const aggregatedVmaf = aggregateVmaf(sceneMetrics);
+  if (aggregatedVmaf) {
+    Object.assign(finalMetrics, aggregatedVmaf);
+  }
+
+  await updateJob(job.id, {
+    status: 'success',
+    progress: 100,
+    metrics_json: finalMetrics
+  });
+}
+
+
 function parseVmafTargets(params = {}) {
   const min = Number(params.vmafMin);
   const max = Number(params.vmafMax);
@@ -207,18 +342,40 @@ async function finalizeOnFailure(jobId, result) {
 }
 
 async function transcodeOnce(job, durationSec, config, options) {
-  const ffmpegArgs = buildFfmpegArgs(job, options.qualityOverride, options.scalePreset);
-  const execution = await runFfmpegProcess(job, durationSec, config, ffmpegArgs);
+  const {
+    qualityOverride,
+    scalePreset,
+    enableVmaf,
+    targetPath = job.output_path,
+    timeSlice = null,
+    progressTracker = null
+  } = options;
+  const segmentDuration = timeSlice?.duration ?? durationSec;
+  const ffmpegArgs = buildFfmpegArgs(
+    job,
+    qualityOverride,
+    scalePreset,
+    timeSlice,
+    targetPath
+  );
+  const execution = await runFfmpegProcess(
+    job,
+    segmentDuration,
+    config,
+    ffmpegArgs,
+    progressTracker
+  );
   if (!execution.success) {
     return execution;
   }
   try {
     const metrics = await collectMetrics(
-      job,
+      targetPath,
+      job.input_path,
       execution.startTime,
-      durationSec,
+      segmentDuration,
       config,
-      options.enableVmaf
+      enableVmaf
     );
     return { success: true, metrics };
   } catch (error) {
@@ -231,8 +388,15 @@ async function transcodeOnce(job, durationSec, config, options) {
   }
 }
 
-function buildFfmpegArgs(job, qualityOverride, scalePreset) {
-  const ffmpegArgs = ['-y', '-i', job.input_path];
+function buildFfmpegArgs(job, qualityOverride, scalePreset, timeSlice, targetPath) {
+  const ffmpegArgs = ['-y'];
+  if (timeSlice?.start >= 0) {
+    ffmpegArgs.push('-ss', timeSlice.start.toFixed(3));
+  }
+  ffmpegArgs.push('-i', job.input_path);
+  if (timeSlice?.duration && timeSlice.duration > 0) {
+    ffmpegArgs.push('-t', timeSlice.duration.toFixed(3));
+  }
   const videoArgs = buildVideoArgs(
     job.codec,
     job.impl,
@@ -271,18 +435,19 @@ function buildFfmpegArgs(job, qualityOverride, scalePreset) {
   if (job.params?.extraArgs && Array.isArray(job.params.extraArgs)) {
     ffmpegArgs.push(...job.params.extraArgs);
   }
-  ffmpegArgs.push(...audioArgs(), job.output_path);
+  ffmpegArgs.push(...audioArgs(), targetPath ?? job.output_path);
   return ffmpegArgs;
 }
 
-async function runFfmpegProcess(job, durationSec, config, ffmpegArgs) {
+async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTracker) {
   const startTime = Date.now();
   const child = spawn(config.ffmpeg.bin, ffmpegArgs, {
     stdio: ['ignore', 'ignore', 'pipe']
   });
   runningChildren.set(job.id, child);
 
-  const maxTimeoutMs = durationSec
+  const timeoutDuration = durationSec ?? 0;
+  const maxTimeoutMs = timeoutDuration
     ? Math.max(durationSec * config.ffmpeg.timeoutFactor * 1000, 30000)
     : 0;
   let timeoutTimer;
@@ -296,9 +461,18 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs) {
   const rl = createInterface({ input: child.stderr });
   rl.on('line', (line) => {
     const timeMatch = /time=([0-9:.]+)/.exec(line);
-    if (timeMatch && durationSec) {
+    if (timeMatch && (durationSec || progressTracker?.duration)) {
       const seconds = parseFfmpegTime(timeMatch[1]);
-      const progress = Math.min(99, Math.floor((seconds / durationSec) * 100));
+      const durationForProgress = progressTracker?.duration ?? durationSec;
+      const offset = progressTracker?.offset ?? 0;
+      const scale = progressTracker?.scale ?? 100;
+      let progress = lastProgress;
+      if (durationForProgress) {
+        const ratio = Math.min(1, seconds / durationForProgress);
+        progress = Math.min(99, Math.floor(offset + ratio * scale));
+      } else {
+        progress = Math.min(99, Math.floor((seconds / (durationSec || 1)) * 100));
+      }
       if (progress >= lastProgress + 1) {
         lastProgress = progress;
         updateJob(job.id, { progress }).catch((err) => {
@@ -337,8 +511,8 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs) {
   return { success: true, startTime, progress: lastProgress };
 }
 
-async function collectMetrics(job, startTime, durationSec, config, enableVmaf) {
-  const fileStat = await stat(job.output_path);
+async function collectMetrics(outputPath, referencePath, startTime, durationSec, config, enableVmaf) {
+  const fileStat = await stat(outputPath);
   const encodeDurationSec = Number(((Date.now() - startTime) / 1000).toFixed(3));
   const metrics = { sizeBytes: fileStat.size, encodeDurationSec };
   if (typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0) {
@@ -348,8 +522,8 @@ async function collectMetrics(job, startTime, durationSec, config, enableVmaf) {
     try {
       const vmafStats = await computeVmafScore(
         config.ffmpeg.bin,
-        job.output_path,
-        job.input_path
+        outputPath,
+        referencePath
       );
       metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
       metrics.vmafMax = Number(vmafStats.max.toFixed(3));
@@ -359,6 +533,258 @@ async function collectMetrics(job, startTime, durationSec, config, enableVmaf) {
     }
   }
   return metrics;
+}
+
+async function encodeSceneSegment(job, durationSec, config, options) {
+  const {
+    scene,
+    targetPath,
+    scalePreset,
+    vmafTargets,
+    qualityMode,
+    initialBitrate,
+    progressTracker
+  } = options;
+  let attempt = 0;
+  let bitrate = initialBitrate;
+  const history = [];
+
+  while (attempt < MAX_VMAF_TUNING_ATTEMPTS) {
+    attempt += 1;
+    const qualityOverride = qualityMode === 'bitrate' && bitrate
+      ? buildBitrateOverride(bitrate)
+      : null;
+    const result = await transcodeOnce(job, durationSec, config, {
+      qualityOverride,
+      scalePreset,
+      enableVmaf: Boolean(vmafTargets),
+      targetPath,
+      timeSlice: scene,
+      progressTracker
+    });
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+    const metrics = result.metrics;
+    if (qualityOverride?.bitrateKbps) {
+      metrics.usedBitrateKbps = qualityOverride.bitrateKbps;
+    }
+    const withinRange = !vmafTargets || isVmafWithin(metrics, vmafTargets);
+    if (vmafTargets) {
+      history.push({
+        attempt,
+        bitrateKbps: metrics.usedBitrateKbps ?? bitrate ?? null,
+        vmafScore: metrics.vmafScore ?? null,
+        vmafMin: metrics.vmafMin ?? null,
+        vmafMax: metrics.vmafMax ?? null
+      });
+      metrics.vmafTuningHistory = history.slice();
+    }
+    if (withinRange || !vmafTargets) {
+      return { success: true, metrics, nextBitrate: metrics.usedBitrateKbps ?? bitrate ?? null };
+    }
+    if (qualityMode !== 'bitrate') {
+      return {
+        success: false,
+        error: `场景 ${scene.index} 的 VMAF ${metrics.vmafScore?.toFixed?.(2) ?? metrics.vmafScore} 不在目标范围内`
+      };
+    }
+    const nextBitrate = decideNextBitrate(
+      metrics.usedBitrateKbps ?? bitrate ?? initialBitrate ?? MIN_BITRATE_KBPS,
+      metrics,
+      vmafTargets
+    );
+    if (!nextBitrate || nextBitrate === bitrate) {
+      return {
+        success: false,
+        error: `场景 ${scene.index} 多次尝试后仍未达到目标 VMAF`
+      };
+    }
+    bitrate = nextBitrate;
+  }
+  return {
+    success: false,
+    error: `场景 ${scene.index} 达到最大尝试次数仍未满足 VMAF 范围`
+  };
+}
+
+function isVmafWithin(metrics, targets) {
+  if (!metrics) return false;
+  const score = Number(metrics.vmafScore);
+  if (!Number.isFinite(score)) {
+    return false;
+  }
+  return score >= targets.min && score <= targets.max;
+}
+
+async function detectSceneCuts(ffmpegBin, inputPath, threshold) {
+  return new Promise((resolve) => {
+    const filterExpr = `select='gt(scene,${threshold})',showinfo`;
+    const args = [
+      '-hide_banner',
+      '-i',
+      inputPath,
+      '-vf',
+      filterExpr,
+      '-f',
+      'null',
+      '-'
+    ];
+    const child = spawn(ffmpegBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const cuts = [];
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      const matches = text.match(/pts_time:([0-9.]+)/g);
+      if (matches) {
+        matches.forEach((match) => {
+          const val = parseFloat(match.split(':')[1]);
+          if (Number.isFinite(val)) {
+            cuts.push(val);
+          }
+        });
+      }
+    });
+    child.on('close', () => {
+      resolve(cuts.sort((a, b) => a - b));
+    });
+    child.on('error', () => resolve([]));
+  });
+}
+
+function buildSceneTimeline(cuts, durationSec) {
+  const timeline = [];
+  const totalDuration = Number.isFinite(durationSec) ? durationSec : null;
+  const points = [0, ...cuts.filter((value) => value > 0)];
+  if (totalDuration && totalDuration > 0) {
+    points.push(totalDuration);
+  }
+  const uniquePoints = [...new Set(points)].sort((a, b) => a - b);
+  for (let i = 0; i < uniquePoints.length - 1; i += 1) {
+    const start = uniquePoints[i];
+    const end = uniquePoints[i + 1];
+    const duration = Number(Math.max(0, end - start).toFixed(3));
+    if (duration <= 0.1) {
+      continue;
+    }
+    timeline.push({
+      index: timeline.length + 1,
+      start,
+      end,
+      duration
+    });
+  }
+  if (!timeline.length && totalDuration) {
+    timeline.push({
+      index: 1,
+      start: 0,
+      end: totalDuration,
+      duration: totalDuration
+    });
+  }
+  return timeline;
+}
+
+async function concatSceneSegments(ffmpegBin, files, outputPath) {
+  const listContent = files
+    .map((file) => `file '${file.replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  const listPath = `${outputPath}.concat.txt`;
+  await writeFile(listPath, listContent, 'utf8');
+  const args = ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outputPath];
+  await runExternalFfmpeg(ffmpegBin, args);
+}
+
+async function generateHlsOutputs(ffmpegBin, sourcePath) {
+  const outputDir = dirname(sourcePath);
+  const baseName = basename(sourcePath, extname(sourcePath)) || 'output';
+  const hlsDir = join(outputDir, `${baseName}-hls`);
+  await mkdir(hlsDir, { recursive: true });
+  const segmentPattern = join(hlsDir, `${baseName}-segment-%03d.ts`);
+  const playlistPath = join(hlsDir, `${baseName}.m3u8`);
+  const args = [
+    '-y',
+    '-i',
+    sourcePath,
+    '-codec',
+    'copy',
+    '-start_number',
+    '0',
+    '-hls_time',
+    '4',
+    '-hls_playlist_type',
+    'vod',
+    '-hls_segment_filename',
+    segmentPattern,
+    playlistPath
+  ];
+  await runExternalFfmpeg(ffmpegBin, args);
+  return { playlist: playlistPath };
+}
+
+async function generateDashOutputs(ffmpegBin, sourcePath) {
+  const outputDir = dirname(sourcePath);
+  const baseName = basename(sourcePath, extname(sourcePath)) || 'output';
+  const dashDir = join(outputDir, `${baseName}-dash`);
+  await mkdir(dashDir, { recursive: true });
+  const manifestPath = join(dashDir, `${baseName}.mpd`);
+  const args = [
+    '-y',
+    '-i',
+    sourcePath,
+    '-c',
+    'copy',
+    '-map',
+    '0',
+    '-f',
+    'dash',
+    '-seg_duration',
+    '4',
+    '-init_seg_name',
+    `${baseName}-init-\$RepresentationID\$.m4s`,
+    '-media_seg_name',
+    `${baseName}-\$RepresentationID\$-\$Number%05d\$.m4s`,
+    manifestPath
+  ];
+  await runExternalFfmpeg(ffmpegBin, args);
+  return { manifest: manifestPath };
+}
+
+async function runExternalFfmpeg(ffmpegBin, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpegBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(true);
+      } else {
+        reject(new Error(stderr.trim() || `ffmpeg 退出码 ${code}`));
+      }
+    });
+    child.on('error', (error) => reject(error));
+  });
+}
+
+function aggregateVmaf(sceneMetrics) {
+  const items = sceneMetrics.filter((scene) => Number.isFinite(scene.metrics?.vmafScore));
+  if (!items.length) {
+    return null;
+  }
+  const totalDuration = items.reduce((acc, scene) => acc + (scene.duration || 0), 0);
+  if (!totalDuration) {
+    return null;
+  }
+  const weighted = items.reduce(
+    (acc, scene) => acc + (scene.metrics.vmafScore * (scene.duration || 0)),
+    0
+  );
+  return {
+    vmafScore: Number((weighted / totalDuration).toFixed(3)),
+    vmafMin: Math.min(...items.map((scene) => scene.metrics.vmafMin ?? scene.metrics.vmafScore)),
+    vmafMax: Math.max(...items.map((scene) => scene.metrics.vmafMax ?? scene.metrics.vmafScore))
+  };
 }
 
 /**

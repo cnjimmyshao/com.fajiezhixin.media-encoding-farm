@@ -7,16 +7,16 @@
 - `app.mjs`：应用入口，合并配置、挂载中间件与路由，并启动调度循环。
 - `src/routes/{web,api}.mjs`：分别渲染任务页面和暴露 JSON API，所有请求最终委派给控制器。
 - `src/controllers/jobs.mjs`：封装 CRUD、审计写入、队列查询等业务逻辑。
-- `src/services/ffmpeg-runner.mjs`：调用 ffprobe 估算时长、拼装参数、spawn ffmpeg，并把进度/结果写回数据库。
+- `src/services/ffmpeg-runner.mjs`：调用 ffprobe 估算时长、拼装参数、spawn ffmpeg，并把进度/结果写回数据库；支持场景检测、分片编码、自适应码率和 HLS/DASH 产物生成。
 - `src/services/presets.mjs`：集中维护编码格式 → 编码器 → Profile/Preset 的参数矩阵，供表单与执行器共用。
 - `src/services/hardware-capabilities.mjs`：在启动阶段检测 ffmpeg 可用的 GPU/硬件编码器，提供给前端禁用本机不支持的选项。
 - `src/db/{sql,migrate}.mjs`：`DatabaseSync` 的 Promise 包装，以及建表脚本。
 
 ## 请求与调度流程
-1. 用户通过 `/jobs/new` 表单提交输入/输出路径，可选缩放分辨率、Profile、Preset，并在 CRF / 码率两种质量模式间切换；前端生成完整的 `codec/impl/profile/preset` 组合并 POST `/api/jobs`。
+1. 用户通过 `/jobs/new` 表单提交输入/输出路径，可选缩放分辨率、Profile、Preset，切换 CRF / 码率模式，还可设定 VMAF 区间或启用按场景编码；前端生成完整的 `codec/impl/profile/preset` 组合并 POST `/api/jobs`。
 2. API 控制器写入 `jobs` 表，同时记录 `audit_logs`（仅 CUD 操作）。
 3. `schedulerLoop` 轮询队列：若存在 `running` 任务则等待，否则取最早的 `queued` 任务。
-4. 调度器用 FFprobe 获取时长，随后调用 `runJob`。执行期间解析 stderr 时间戳更新 `progress`，完成后写入 metrics 或错误信息；若任务启用了码率+VMAF 目标，执行器会在单个任务内多次尝试不同码率直至逼近目标区间。
+4. 调度器用 FFprobe 获取时长，随后调用 `runJob`。执行期间解析 stderr 时间戳更新 `progress`，完成后写入 metrics 或错误信息；若启用了码率+VMAF 目标会在单次或按场景多次尝试不同码率直至逼近目标区间，按场景模式下还会自动合并片段并生成 HLS/DASH 清单。
 5. Web 端通过 `/jobs`、`/jobs/:id` 配合 `fetch /api/jobs/:id` 实时展示状态与进度条。
 
 ## 数据模型
@@ -26,7 +26,7 @@
 | id | `crypto.randomUUID()` |
 | input_path / output_path | 绝对路径 |
 | codec / impl | 选择的编码格式与编码器 |
-| params_json | 包含 `presetKey`、profile、preset、scale、qualityMode、crf/bitrate、VMAF 目标等 |
+| params_json | 包含 `presetKey`、profile、preset、scale、qualityMode、crf/bitrate、VMAF 目标、perScene 等 |
 | status / progress | `queued/running/success/failed/canceled` + 0-100 |
 | metrics_json | 目前记录输出文件大小，可扩展 |
 | error_msg | 失败原因 |

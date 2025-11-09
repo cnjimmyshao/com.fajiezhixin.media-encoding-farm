@@ -105,6 +105,7 @@ export default router;
 function normalizeJobParams(rawParams = {}) {
   const params = { ...rawParams };
   params.scale = params.scale || 'source';
+  params.perScene = Boolean(params.perScene);
   const qualityMode = params.qualityMode === 'bitrate' ? 'bitrate' : 'crf';
   params.qualityMode = qualityMode;
   if (qualityMode === 'bitrate') {
@@ -127,6 +128,10 @@ function normalizeJobParams(rawParams = {}) {
   } else {
     delete params.vmafMin;
     delete params.vmafMax;
+  }
+  const hasVmafRange = Number.isFinite(params.vmafMin) && Number.isFinite(params.vmafMax);
+  if (params.perScene && !hasVmafRange) {
+    return { error: '场景编码需要设置有效的 VMAF 范围' };
   }
   params.enableVmaf = Boolean(params.enableVmaf);
   return params;
