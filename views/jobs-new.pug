@@ -28,9 +28,14 @@ block content
         p(class="radio-placeholder") 请选择 CRF 值
 
     fieldset
-      legend 编码预设 / Profile
+      legend 编码 Profile
       div(id="profileOptions", class="radio-group")
-        p(class="radio-placeholder") 请选择预设
+        p(class="radio-placeholder") 请选择 Profile
+
+    fieldset
+      legend 速度预设（Preset）
+      div(id="presetOptions", class="radio-group")
+        p(class="radio-placeholder") 请选择编码预设
 
     fieldset
       legend 可选分析
@@ -50,6 +55,7 @@ block content
     const codecOptionsContainer = document.getElementById('codecOptions');
     const encoderOptionsContainer = document.getElementById('encoderOptions');
     const profileOptionsContainer = document.getElementById('profileOptions');
+    const presetOptionsContainer = document.getElementById('presetOptions');
     const crfOptionsContainer = document.getElementById('crfOptions');
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
@@ -69,20 +75,31 @@ block content
 
       let selected = null;
       let requiredAssigned = false;
-      items.forEach((item, index) => {
+      let firstEnabledInput = null;
+      items.forEach((item) => {
         const label = document.createElement('label');
         label.className = 'radio-option';
+        if (item.disabled) {
+          label.classList.add('disabled');
+        }
 
         const input = document.createElement('input');
         input.type = 'radio';
         input.name = name;
         input.value = item.key;
-        if (!requiredAssigned) {
+        input.disabled = Boolean(item.disabled);
+        if (!item.disabled && !requiredAssigned) {
           input.required = true;
           requiredAssigned = true;
         }
 
-        const shouldCheck = selectedValue ? item.key === selectedValue : index === 0;
+        if (!item.disabled && !firstEnabledInput) {
+          firstEnabledInput = input;
+        }
+
+        const shouldCheck = !item.disabled && (
+          selectedValue ? item.key === selectedValue : !selected
+        );
         if (shouldCheck) {
           input.checked = true;
           selected = item.key;
@@ -96,12 +113,9 @@ block content
         container.appendChild(label);
       });
 
-      if (!selected) {
-        const firstInput = container.querySelector('input');
-        if (firstInput) {
-          firstInput.checked = true;
-          selected = firstInput.value;
-        }
+      if (!selected && firstEnabledInput) {
+        firstEnabledInput.checked = true;
+        selected = firstEnabledInput.value;
       }
 
       return selected;
@@ -119,8 +133,8 @@ block content
       if (!encoder) {
         return null;
       }
-      const profile = encoder.profiles.find((item) => item.key === profileKey);
-      if (!profile || !profile.defaultCrf) {
+      const profile = encoder.profiles?.find((item) => item.key === profileKey);
+      if (!profile?.defaultCrf || !Array.isArray(encoder.crfOptions)) {
         return null;
       }
       return encoder.crfOptions.some((item) => item.key === profile.defaultCrf)
@@ -128,10 +142,26 @@ block content
         : null;
     }
 
-    function updateProfileAndCrf(codecKey, encoderKey, selectedProfileKey, selectedCrfKey) {
+    function determinePresetSelection(encoder, profileKey, presetKey) {
+      if (!encoder) {
+        return null;
+      }
+      if (presetKey && encoder.presets?.some((item) => item.key === presetKey)) {
+        return presetKey;
+      }
+      const profile = encoder.profiles?.find((item) => item.key === profileKey);
+      if (profile?.defaultPreset && encoder.presets?.some((item) => item.key === profile.defaultPreset)) {
+        return profile.defaultPreset;
+      }
+      const firstPreset = encoder.presets?.find((item) => !item.disabled) ?? encoder.presets?.[0];
+      return firstPreset?.key ?? null;
+    }
+
+    function renderEncoderDetails(codecKey, encoderKey, selected = {}) {
       const encoder = getEncoderConfig(codecKey, encoderKey);
       if (!encoder) {
-        fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择预设');
+        fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择 Profile');
+        fillRadioGroup(presetOptionsContainer, 'preset', [], '请选择编码预设');
         fillRadioGroup(crfOptionsContainer, 'crf', [], '请选择 CRF 值');
         return;
       }
@@ -140,11 +170,19 @@ block content
         profileOptionsContainer,
         'profile',
         encoder.profiles,
-        '请选择预设',
-        selectedProfileKey
+        '请选择 Profile',
+        selected.profile
       );
 
-      const preferredCrf = selectedCrfKey ?? determineCrfSelection(encoder, profileSelection);
+      const presetSelection = fillRadioGroup(
+        presetOptionsContainer,
+        'preset',
+        encoder.presets,
+        '请选择编码预设',
+        determinePresetSelection(encoder, profileSelection, selected.preset)
+      );
+
+      const preferredCrf = selected.crf ?? determineCrfSelection(encoder, profileSelection);
       fillRadioGroup(
         crfOptionsContainer,
         'crf',
@@ -152,6 +190,7 @@ block content
         '请选择 CRF 值',
         preferredCrf
       );
+      return { profileSelection, presetSelection };
     }
 
     function updateEncoderOptions(codecKey) {
@@ -164,9 +203,10 @@ block content
         '请选择编码器'
       );
       if (encoderSelection) {
-        updateProfileAndCrf(codecKey, encoderSelection);
+        renderEncoderDetails(codecKey, encoderSelection);
       } else {
-        fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择预设');
+        fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择 Profile');
+        fillRadioGroup(presetOptionsContainer, 'preset', [], '请选择编码预设');
         fillRadioGroup(crfOptionsContainer, 'crf', [], '请选择 CRF 值');
       }
     }
@@ -188,7 +228,11 @@ block content
       if (!codecKey) {
         return;
       }
-      updateProfileAndCrf(codecKey, event.target.value);
+      renderEncoderDetails(codecKey, event.target.value, {
+        profile: form.elements.profile?.value,
+        preset: form.elements.preset?.value,
+        crf: form.elements.crf?.value
+      });
     });
 
     profileOptionsContainer.addEventListener('change', (event) => {
@@ -201,15 +245,11 @@ block content
       if (!codecKey || !encoderKey) {
         return;
       }
-      const encoder = getEncoderConfig(codecKey, encoderKey);
-      const crfKey = determineCrfSelection(encoder, event.target.value);
-      if (!crfKey) {
-        return;
-      }
-      const crfInput = crfOptionsContainer.querySelector(`input[name="crf"][value="${crfKey}"]`);
-      if (crfInput) {
-        crfInput.checked = true;
-      }
+      renderEncoderDetails(codecKey, encoderKey, {
+        profile: event.target.value,
+        preset: form.elements.preset?.value,
+        crf: form.elements.crf?.value
+      });
     });
 
     const initialCodecInput = codecOptionsContainer.querySelector('input[name="codec"]:checked');
@@ -224,19 +264,20 @@ block content
       const codec = formData.get('codec');
       const impl = formData.get('impl');
       const profile = formData.get('profile');
+      const preset = formData.get('preset');
       const crf = formData.get('crf');
-      if (!codec || !impl || !profile || !crf) {
-        message.textContent = '请选择完整的编码、编码器、Profile 与 CRF';
+      if (!codec || !impl || !profile || !preset || !crf) {
+        message.textContent = '请选择完整的编码、编码器、Profile、Preset 与 CRF';
         return;
       }
-      const presetKey = `${codec}:${impl}:${profile}:${crf}`;
+      const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf}`;
       const enableVmaf = formData.get('enableVmaf') === 'on';
       const payload = {
         inputPath: formData.get('inputPath'),
         outputPath: formData.get('outputPath'),
         codec,
         impl,
-        params: { presetKey, profile, crf, enableVmaf }
+        params: { presetKey, profile, preset, crf, enableVmaf }
       };
       const res = await fetch('/api/jobs', {
         method: 'POST',

@@ -30,9 +30,10 @@ router.get('/jobs', async (req, res, next) => {
 });
 
 router.get('/jobs/new', (req, res) => {
+  const encoderSupport = req.app?.locals?.encoderSupport ?? new Set();
   res.render('jobs-new', {
     title: '新建任务',
-    codecOptions: codecOptions()
+    codecOptions: codecOptions({ supportedEncoders: encoderSupport })
   });
 });
 

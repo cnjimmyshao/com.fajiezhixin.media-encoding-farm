@@ -61,12 +61,33 @@ export async function runJob(job, durationSec, config) {
   await updateJob(job.id, { status: 'running', progress: 0, error_msg: null });
 
   const ffmpegArgs = ['-y', '-i', job.input_path];
-  const videoArgs = buildVideoArgs(job.codec, job.impl, job.params?.profile, job.params?.crf);
+  const videoArgs = buildVideoArgs(
+    job.codec,
+    job.impl,
+    job.params?.profile,
+    job.params?.preset,
+    job.params?.crf
+  );
   if (videoArgs) {
     ffmpegArgs.push(...videoArgs);
   } else {
-    const presetKey = job.params?.presetKey ?? `${job.codec}:${job.impl}:baseline`;
-    const preset = videoPresets[presetKey];
+    const fallbackKeys = [];
+    if (job.params?.presetKey) {
+      fallbackKeys.push(job.params.presetKey);
+    }
+    if (job.params?.preset && job.params?.profile && job.params?.crf) {
+      fallbackKeys.push(
+        `${job.codec}:${job.impl}:${job.params.profile}:${job.params.preset}:${job.params.crf}`
+      );
+    }
+    if (job.params?.profile && job.params?.crf) {
+      fallbackKeys.push(`${job.codec}:${job.impl}:${job.params.profile}:${job.params.crf}`);
+    }
+    if (job.params?.profile) {
+      fallbackKeys.push(`${job.codec}:${job.impl}:${job.params.profile}`);
+    }
+    fallbackKeys.push(`${job.codec}:${job.impl}:baseline`);
+    const preset = fallbackKeys.map((key) => videoPresets[key]).find(Boolean);
     if (preset) {
       ffmpegArgs.push(...preset.args);
     }
@@ -144,8 +165,14 @@ export async function runJob(job, durationSec, config) {
       }
       if (job.params?.enableVmaf) {
         try {
-          const vmafScore = await computeVmafScore(config.ffmpeg.bin, job.output_path, job.input_path);
-          metrics.vmafScore = Number(vmafScore.toFixed(3));
+          const vmafStats = await computeVmafScore(
+            config.ffmpeg.bin,
+            job.output_path,
+            job.input_path
+          );
+          metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
+          metrics.vmafMax = Number(vmafStats.max.toFixed(3));
+          metrics.vmafMin = Number(vmafStats.min.toFixed(3));
         } catch (error) {
           metrics.vmafError = error.message;
         }
@@ -208,9 +235,35 @@ async function computeVmafScore(ffmpegBin, distortedPath, referencePath) {
   if (code !== 0) {
     throw new Error(`VMAF 计算失败，退出码 ${code}`);
   }
-  const match = /VMAF score = ([0-9.]+)/.exec(stderr);
-  if (!match) {
+  const jsonStart = stderr.lastIndexOf('{"version"');
+  if (jsonStart === -1) {
     throw new Error('未能解析 VMAF 结果');
   }
-  return Number(match[1]);
+  const jsonSlice = stderr.slice(jsonStart);
+  const jsonEnd = jsonSlice.lastIndexOf('}');
+  if (jsonEnd === -1) {
+    throw new Error('未能解析 VMAF 结果');
+  }
+  let payload;
+  try {
+    payload = JSON.parse(jsonSlice.slice(0, jsonEnd + 1));
+  } catch (error) {
+    throw new Error(`VMAF 结果 JSON 解析失败: ${error.message}`);
+  }
+  const aggregateScore = Number(payload?.aggregate?.vmaf);
+  if (!Number.isFinite(aggregateScore)) {
+    throw new Error('VMAF 结果缺少 aggregate.vmaf');
+  }
+  const frameScores = Array.isArray(payload?.frames)
+    ? payload.frames
+        .map((frame) => Number(frame?.metrics?.vmaf))
+        .filter((value) => Number.isFinite(value))
+    : [];
+  const maxScore = frameScores.length ? Math.max(...frameScores) : aggregateScore;
+  const minScore = frameScores.length ? Math.min(...frameScores) : aggregateScore;
+  return {
+    mean: aggregateScore,
+    max: maxScore,
+    min: minScore
+  };
 }

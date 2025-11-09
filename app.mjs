@@ -17,6 +17,7 @@ import {
   updateJob
 } from './src/controllers/jobs.mjs';
 import { probeDuration, runJob } from './src/services/ffmpeg-runner.mjs';
+import { detectEncoderSupport } from './src/services/hardware-capabilities.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,6 +40,7 @@ function buildConfig() {
 
 const config = buildConfig();
 await mkdir(config.paths.workspace, { recursive: true });
+const encoderSupport = await detectEncoderSupport(config.ffmpeg.bin);
 
 const app = express();
 app.set('views', join(__dirname, 'views'));
@@ -47,6 +49,7 @@ app.use(morgan('dev'));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(express.static(join(__dirname, 'src/public')));
+app.locals.encoderSupport = encoderSupport;
 
 app.use('/', webRoutes);
 app.use('/api', apiRoutes);
