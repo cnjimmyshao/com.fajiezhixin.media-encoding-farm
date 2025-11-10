@@ -51,19 +51,24 @@ export async function probeDuration(ffprobeBin, inputPath, jobLog = null) {
     inputPath
   ];
   pushCommand(jobLog, ffprobeBin, args);
-  const child = spawn(ffprobeBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-  let stdout = '';
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk.toString();
+  return new Promise((resolve) => {
+    const child = spawn(ffprobeBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.on('error', () => {
+      resolve(null);
+    });
+    child.on('close', (code) => {
+      if (code !== 0) {
+        return resolve(null);
+      }
+      const val = parseFloat(stdout.trim());
+      resolve(Number.isFinite(val) ? val : null);
+    });
   });
-
-  const [code] = await once(child, 'close');
-  if (code !== 0) {
-    return null;
-  }
-  const val = parseFloat(stdout.trim());
-  return Number.isFinite(val) ? val : null;
 }
 
 /**
@@ -495,95 +500,108 @@ function buildFfmpegArgs(job, qualityOverride, scalePreset, timeSlice, targetPat
 async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTracker, jobLog) {
   const startTime = Date.now();
   const command = pushCommand(jobLog, config.ffmpeg.bin, ffmpegArgs);
-  const child = spawn(config.ffmpeg.bin, ffmpegArgs, {
-    stdio: ['ignore', 'ignore', 'pipe']
-  });
-  runningChildren.set(job.id, child);
 
-  const timeoutDuration = durationSec ?? 0;
-  const maxTimeoutMs = timeoutDuration
-    ? Math.max(durationSec * config.ffmpeg.timeoutFactor * 1000, 30000)
-    : 0;
-  let timeoutTimer;
-  if (maxTimeoutMs > 0) {
-    timeoutTimer = setTimeout(() => {
-      child.kill('SIGKILL');
-    }, maxTimeoutMs);
-  }
+  return new Promise(async (resolve) => {
+    const child = spawn(config.ffmpeg.bin, ffmpegArgs, {
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+    runningChildren.set(job.id, child);
 
-  let lastProgress = 0;
-  let stderrBuffer = '';
-  child.stderr.on('data', (chunk) => {
-    stderrBuffer += chunk.toString();
-  });
-  const rl = createInterface({ input: child.stderr });
-  rl.on('line', (line) => {
-    const timeMatch = /time=([0-9:.]+)/.exec(line);
-    if (timeMatch && (durationSec || progressTracker?.duration)) {
-      const seconds = parseFfmpegTime(timeMatch[1]);
-      const durationForProgress = progressTracker?.duration ?? durationSec;
-      const offset = progressTracker?.offset ?? 0;
-      const scale = progressTracker?.scale ?? 100;
-      let progress = lastProgress;
-      if (durationForProgress) {
-        const ratio = Math.min(1, seconds / durationForProgress);
-        progress = Math.min(99, Math.floor(offset + ratio * scale));
-      } else {
-        progress = Math.min(99, Math.floor((seconds / (durationSec || 1)) * 100));
-      }
-      if (progress >= lastProgress + 1) {
-        lastProgress = progress;
-        updateJob(job.id, { progress }).catch((err) => {
-          console.error('进度更新失败', err);
-        });
-      }
+    child.on('error', (err) => {
+      logCommandError(jobLog, {
+        command,
+        message: `ffmpeg 进程启动失败: ${err.message}`,
+        stderr: err.stack,
+        context: 'transcode-spawn'
+      });
+      resolve({ success: false, status: 'failed', error: `ffmpeg 进程启动失败: ${err.message}` });
+    });
+
+    const timeoutDuration = durationSec ?? 0;
+    const maxTimeoutMs = timeoutDuration
+      ? Math.max(durationSec * config.ffmpeg.timeoutFactor * 1000, 30000)
+      : 0;
+    let timeoutTimer;
+    if (maxTimeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+      }, maxTimeoutMs);
     }
+
+    let lastProgress = 0;
+    let stderrBuffer = '';
+    child.stderr.on('data', (chunk) => {
+      stderrBuffer += chunk.toString();
+    });
+    const rl = createInterface({ input: child.stderr });
+    rl.on('line', (line) => {
+      const timeMatch = /time=([0-9:.]+)/.exec(line);
+      if (timeMatch && (durationSec || progressTracker?.duration)) {
+        const seconds = parseFfmpegTime(timeMatch[1]);
+        const durationForProgress = progressTracker?.duration ?? durationSec;
+        const offset = progressTracker?.offset ?? 0;
+        const scale = progressTracker?.scale ?? 100;
+        let progress = lastProgress;
+        if (durationForProgress) {
+          const ratio = Math.min(1, seconds / durationForProgress);
+          progress = Math.min(99, Math.floor(offset + ratio * scale));
+        } else {
+          progress = Math.min(99, Math.floor((seconds / (durationSec || 1)) * 100));
+        }
+        if (progress >= lastProgress + 1) {
+          lastProgress = progress;
+          updateJob(job.id, { progress }).catch((err) => {
+            console.error('进度更新失败', err);
+          });
+        }
+      }
+    });
+
+    const [code, signal] = await once(child, 'close');
+    runningChildren.delete(job.id);
+    rl.close();
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+    }
+
+    const stderrText = stderrBuffer.trim();
+
+    if (signal === 'SIGTERM') {
+      return resolve({ success: false, status: 'canceled', progress: lastProgress });
+    }
+    if (signal === 'SIGKILL') {
+      logCommandError(jobLog, {
+        command,
+        message: '任务执行超时并被终止',
+        signal,
+        stderr: stderrText || null,
+        context: 'transcode'
+      });
+      return resolve({
+        success: false,
+        status: 'failed',
+        error: '任务执行超时并被终止',
+        progress: lastProgress
+      });
+    }
+    if (code !== 0) {
+      logCommandError(jobLog, {
+        command,
+        message: `ffmpeg 退出码 ${code}`,
+        exitCode: code,
+        signal,
+        stderr: stderrText || null,
+        context: 'transcode'
+      });
+      return resolve({
+        success: false,
+        status: 'failed',
+        error: `ffmpeg 退出码 ${code}`,
+        progress: lastProgress
+      });
+    }
+    resolve({ success: true, startTime, progress: lastProgress });
   });
-
-  const [code, signal] = await once(child, 'close');
-  runningChildren.delete(job.id);
-  rl.close();
-  if (timeoutTimer) {
-    clearTimeout(timeoutTimer);
-  }
-
-  const stderrText = stderrBuffer.trim();
-
-  if (signal === 'SIGTERM') {
-    return { success: false, status: 'canceled', progress: lastProgress };
-  }
-  if (signal === 'SIGKILL') {
-    logCommandError(jobLog, {
-      command,
-      message: '任务执行超时并被终止',
-      signal,
-      stderr: stderrText || null,
-      context: 'transcode'
-    });
-    return {
-      success: false,
-      status: 'failed',
-      error: '任务执行超时并被终止',
-      progress: lastProgress
-    };
-  }
-  if (code !== 0) {
-    logCommandError(jobLog, {
-      command,
-      message: `ffmpeg 退出码 ${code}`,
-      exitCode: code,
-      signal,
-      stderr: stderrText || null,
-      context: 'transcode'
-    });
-    return {
-      success: false,
-      status: 'failed',
-      error: `ffmpeg 退出码 ${code}`,
-      progress: lastProgress
-    };
-  }
-  return { success: true, startTime, progress: lastProgress };
 }
 
 async function collectMetrics(
@@ -936,82 +954,94 @@ async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options
     '-'
   ];
   const command = pushCommand(jobLog, ffmpegBin, args);
-  const child = spawn(ffmpegBin, args, {
-    stdio: ['ignore', 'ignore', 'pipe']
+  return new Promise(async (resolve, reject) => {
+    const child = spawn(ffmpegBin, args, {
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+    child.on('error', (err) => {
+      logCommandError(jobLog, {
+        command,
+        message: `VMAF 计算进程启动失败: ${err.message}`,
+        stderr: err.stack,
+        context: 'vmaf-spawn'
+      });
+      reject(new Error(`VMAF 计算进程启动失败: ${err.message}`));
+    });
+
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    const [code] = await once(child, 'close');
+    if (code !== 0) {
+      const stderrText = stderr.trim();
+      logCommandError(jobLog, {
+        command,
+        message: `VMAF 计算失败，退出码 ${code}`,
+        stderr: stderrText || null,
+        exitCode: code,
+        context: 'vmaf'
+      });
+      return reject(new Error(`VMAF 计算失败，退出码 ${code}`));
+    }
+    const jsonStart = stderr.lastIndexOf('{"version"');
+    if (jsonStart === -1) {
+      logCommandError(jobLog, {
+        command,
+        message: '未能解析 VMAF 结果',
+        stderr: stderr.trim() || null,
+        context: 'vmaf'
+      });
+      return reject(new Error('未能解析 VMAF 结果'));
+    }
+    const jsonSlice = stderr.slice(jsonStart);
+    const jsonEnd = jsonSlice.lastIndexOf('}');
+    if (jsonEnd === -1) {
+      logCommandError(jobLog, {
+        command,
+        message: '未能解析 VMAF 结果',
+        stderr: stderr.trim() || null,
+        context: 'vmaf'
+      });
+      return reject(new Error('未能解析 VMAF 结果'));
+    }
+    const jsonText = jsonSlice.slice(0, jsonEnd + 1);
+    let payload;
+    try {
+      payload = JSON.parse(jsonText);
+    } catch (error) {
+      logCommandError(jobLog, {
+        command,
+        message: `VMAF 结果 JSON 解析失败: ${error.message}`,
+        stderr: stderr.trim() || null,
+        context: 'vmaf'
+      });
+      return reject(new Error(`VMAF 结果 JSON 解析失败: ${error.message}`));
+    }
+    const aggregateScore = Number(payload?.aggregate?.vmaf);
+    if (!Number.isFinite(aggregateScore)) {
+      logCommandError(jobLog, {
+        command,
+        message: 'VMAF 结果缺少 aggregate.vmaf',
+        stderr: stderr.trim() || null,
+        context: 'vmaf'
+      });
+      return reject(new Error('VMAF 结果缺少 aggregate.vmaf'));
+    }
+    const frameScores = Array.isArray(payload?.frames)
+      ? payload.frames
+          .map((frame) => Number(frame?.metrics?.vmaf))
+          .filter((value) => Number.isFinite(value))
+      : [];
+    const maxScore = frameScores.length ? Math.max(...frameScores) : aggregateScore;
+    const minScore = frameScores.length ? Math.min(...frameScores) : aggregateScore;
+    if (reportPath) {
+      await writeFile(reportPath, jsonText, 'utf8');
+    }
+    resolve({
+      mean: aggregateScore,
+      max: maxScore,
+      min: minScore
+    });
   });
-  let stderr = '';
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk.toString();
-  });
-  const [code] = await once(child, 'close');
-  if (code !== 0) {
-    const stderrText = stderr.trim();
-    logCommandError(jobLog, {
-      command,
-      message: `VMAF 计算失败，退出码 ${code}`,
-      stderr: stderrText || null,
-      exitCode: code,
-      context: 'vmaf'
-    });
-    throw new Error(`VMAF 计算失败，退出码 ${code}`);
-  }
-  const jsonStart = stderr.lastIndexOf('{"version"');
-  if (jsonStart === -1) {
-    logCommandError(jobLog, {
-      command,
-      message: '未能解析 VMAF 结果',
-      stderr: stderr.trim() || null,
-      context: 'vmaf'
-    });
-    throw new Error('未能解析 VMAF 结果');
-  }
-  const jsonSlice = stderr.slice(jsonStart);
-  const jsonEnd = jsonSlice.lastIndexOf('}');
-  if (jsonEnd === -1) {
-    logCommandError(jobLog, {
-      command,
-      message: '未能解析 VMAF 结果',
-      stderr: stderr.trim() || null,
-      context: 'vmaf'
-    });
-    throw new Error('未能解析 VMAF 结果');
-  }
-  const jsonText = jsonSlice.slice(0, jsonEnd + 1);
-  let payload;
-  try {
-    payload = JSON.parse(jsonText);
-  } catch (error) {
-    logCommandError(jobLog, {
-      command,
-      message: `VMAF 结果 JSON 解析失败: ${error.message}`,
-      stderr: stderr.trim() || null,
-      context: 'vmaf'
-    });
-    throw new Error(`VMAF 结果 JSON 解析失败: ${error.message}`);
-  }
-  const aggregateScore = Number(payload?.aggregate?.vmaf);
-  if (!Number.isFinite(aggregateScore)) {
-    logCommandError(jobLog, {
-      command,
-      message: 'VMAF 结果缺少 aggregate.vmaf',
-      stderr: stderr.trim() || null,
-      context: 'vmaf'
-    });
-    throw new Error('VMAF 结果缺少 aggregate.vmaf');
-  }
-  const frameScores = Array.isArray(payload?.frames)
-    ? payload.frames
-        .map((frame) => Number(frame?.metrics?.vmaf))
-        .filter((value) => Number.isFinite(value))
-    : [];
-  const maxScore = frameScores.length ? Math.max(...frameScores) : aggregateScore;
-  const minScore = frameScores.length ? Math.min(...frameScores) : aggregateScore;
-  if (reportPath) {
-    await writeFile(reportPath, jsonText, 'utf8');
-  }
-  return {
-    mean: aggregateScore,
-    max: maxScore,
-    min: minScore
-  };
 }
