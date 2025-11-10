@@ -72,3 +72,7 @@ The server will start on `http://localhost:3000` by default.
 *   **API:** A RESTful API is provided for job management, following standard conventions (e.g., `POST /api/jobs`, `GET /api/jobs/:id`).
 *   **Error Handling:** Express middleware is used for centralized error handling. The scheduler loop includes `try...catch` blocks to prevent crashes from individual job failures.
 *   **Database:** Database interactions are abstracted away in the `src/controllers/jobs.mjs` file. The schema is managed via the `pnpm migrate` script.
+
+---
+
+**重要提示：** 从现在开始，所有对话将使用中文进行。
