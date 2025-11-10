@@ -12,9 +12,11 @@ import { probeDuration, runJob } from './services/ffmpeg-runner.mjs';
 import {
   createJobLog,
   logJobInput,
+  logCommandError,
   persistJobLog
 } from './services/job-log.mjs';
 import { prepareJobInput } from './services/remote-input.mjs';
+import logger from './services/logger.mjs';
 
 async function schedulerLoop(config) {
   while (true) {
@@ -28,6 +30,7 @@ async function schedulerLoop(config) {
         await delay(config.scheduler.loopInterval);
         continue;
       }
+      logger.info(`开始处理任务 #${job.id}`);
       const jobLog = createJobLog(job.output_path);
       logJobInput(jobLog, job, { source: 'scheduler' });
       let prepared;
@@ -38,14 +41,19 @@ async function schedulerLoop(config) {
           status: 'failed',
           error_msg: `下载输入文件失败: ${error?.message ?? '未知错误'}`
         });
+        logCommandError(jobLog, {
+          command: 'prepareJobInput',
+          message: `下载输入文件失败: ${error?.message ?? '未知错误'}`,
+          error: error?.stack ?? String(error),
+          context: 'prepareJobInput'
+        });
         await persistJobLog(jobLog, job.output_path);
         continue;
       }
-      const { job: preparedJob, cleanup } = prepared;
       try {
         const duration = await probeDuration(
           config.ffmpeg.ffprobe,
-          preparedJob.input_path,
+          prepared.job.input_path,
           jobLog
         );
         if (duration === null) {
@@ -53,21 +61,39 @@ async function schedulerLoop(config) {
             status: 'failed',
             error_msg: '无法通过 ffprobe 获取媒体时长'
           });
+          logCommandError(jobLog, {
+            command: 'ffprobe',
+            message: '无法通过 ffprobe 获取媒体时长',
+            context: 'probeDuration'
+          });
           await persistJobLog(jobLog, job.output_path);
           continue;
         }
-        await runJob(preparedJob, duration, config, jobLog);
+        await runJob(prepared.job, duration, config, jobLog);
+      } catch (error) {
+        await updateJob(job.id, {
+          status: 'failed',
+          error_msg: `FFmpeg 任务执行失败: ${error?.message ?? '未知错误'}`
+        });
+        logCommandError(jobLog, {
+          command: 'ffmpeg',
+          message: `FFmpeg 任务执行失败: ${error?.message ?? '未知错误'}`,
+          error: error?.stack ?? String(error),
+          context: 'runJob'
+        });
       } finally {
-        await cleanup();
+        if (prepared?.cleanup) {
+          await prepared.cleanup();
+        }
       }
     } catch (error) {
-      console.error('调度器异常', error);
+      logger.error('调度器异常', error);
     }
     await delay(config.scheduler.loopInterval);
   }
 }
 
 export function startScheduler(config) {
-  console.log('任务调度器已启动');
+  logger.info('任务调度器已启动');
   schedulerLoop(config);
 }

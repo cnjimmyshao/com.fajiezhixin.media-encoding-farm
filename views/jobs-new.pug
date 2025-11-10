@@ -84,6 +84,9 @@ block content
         input(type="checkbox", id="enableVmaf", name="enableVmaf")
         span 启用 VMAF 质量评估
       p(class="field-hint") 选择后将在任务完成后运行 VMAF 评估，可能增加额外耗时。
+      label(for="vmafTimeout") VMAF 超时时间（秒）
+      input(type="number", id="vmafTimeout", name="vmafTimeout", min="1", step="1", placeholder="例如 300")
+      p(class="field-hint") 为 VMAF 分析设置一个超时时间，防止进程卡死。
 
     button(type="submit") 提交任务
   p#form-message
@@ -107,6 +110,7 @@ block content
     const perSceneInput = document.getElementById('perScene');
     const sceneThreshInput = document.getElementById('sceneThresh');
     const enableVmafInput = document.getElementById('enableVmaf');
+    const vmafTimeoutInput = document.getElementById('vmafTimeout');
     let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
@@ -364,6 +368,9 @@ block content
       if (vmafMaxInput) {
         vmafMaxInput.value = Number.isFinite(state.vmafMax) ? state.vmafMax : '';
       }
+      if (vmafTimeoutInput) {
+        vmafTimeoutInput.value = Number.isFinite(state.vmafTimeout) ? state.vmafTimeout : '';
+      }
     }
 
     codecOptionsContainer.addEventListener('change', (event) => {
@@ -516,6 +523,8 @@ block content
         return;
       }
       const enableVmaf = formData.get('enableVmaf') === 'on' || hasVmafRange || perScene;
+      const vmafTimeout = parseInt(formData.get('vmafTimeout'), 10);
+
       const payload = {
         inputPath: formData.get('inputPath'),
         outputPath: formData.get('outputPath'),
@@ -533,7 +542,8 @@ block content
           vmafMin: hasVmafRange ? vmafMin : null,
           vmafMax: hasVmafRange ? vmafMax : null,
           perScene,
-          sceneThreshold: perScene ? sceneThreshold : null
+          sceneThreshold: perScene ? sceneThreshold : null,
+          vmafTimeout: Number.isFinite(vmafTimeout) ? vmafTimeout : null
         }
       };
       persistFormState({
@@ -551,7 +561,8 @@ block content
         vmafMin: hasVmafRange ? vmafMin : null,
         vmafMax: hasVmafRange ? vmafMax : null,
         perScene,
-        sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null
+        sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null,
+        vmafTimeout: Number.isFinite(vmafTimeout) ? vmafTimeout : null
       });
       const res = await fetch('/api/jobs', {
         method: 'POST',

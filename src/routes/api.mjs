@@ -143,5 +143,13 @@ function normalizeJobParams(rawParams = {}) {
     delete params.sceneThreshold;
   }
   params.enableVmaf = Boolean(params.enableVmaf);
+
+  const vmafTimeout = Number(params.vmafTimeout);
+  if (Number.isFinite(vmafTimeout) && vmafTimeout > 0) {
+    params.vmafTimeout = Math.round(vmafTimeout);
+  } else {
+    delete params.vmafTimeout;
+  }
+
   return params;
 }

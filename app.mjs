@@ -12,6 +12,7 @@ import apiRoutes from './src/routes/api.mjs';
 import webRoutes from './src/routes/web.mjs';
 import { startScheduler } from './src/scheduler.mjs';
 import { detectEncoderSupport } from './src/services/hardware-capabilities.mjs';
+import logger from './src/services/logger.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +29,18 @@ function buildConfig() {
   if (process.env.FFPROBE_BIN) config.ffmpeg.ffprobe = process.env.FFPROBE_BIN;
   if (process.env.FFMPEG_TIMEOUT_FACTOR) {
     config.ffmpeg.timeoutFactor = Number(process.env.FFMPEG_TIMEOUT_FACTOR);
+  }
+  if (process.env.VMAF_TIMEOUT_SEC) {
+    config.ffmpeg.vmaf.timeoutSec = Number(process.env.VMAF_TIMEOUT_SEC);
+  }
+  if (process.env.VMAF_MODEL) {
+    config.ffmpeg.vmaf.model = process.env.VMAF_MODEL;
+  }
+  if (process.env.VMAF_N_THREADS) {
+    config.ffmpeg.vmaf.n_threads = Number(process.env.VMAF_N_THREADS);
+  }
+  if (process.env.VMAF_N_SUBSAMPLE) {
+    config.ffmpeg.vmaf.n_subsample = Number(process.env.VMAF_N_SUBSAMPLE);
   }
   return config;
 }
@@ -49,7 +62,7 @@ app.use('/', webRoutes);
 app.use('/api', apiRoutes);
 
 app.use((err, req, res, next) => {
-  console.error('请求处理异常', err);
+  logger.error('请求处理异常', err);
   if (req.accepts('json')) {
     res.status(500).json({ error: '服务器内部错误' });
   } else {
@@ -58,7 +71,7 @@ app.use((err, req, res, next) => {
 });
 
 const server = app.listen(config.server.port, () => {
-  console.log(`服务器已启动：http://localhost:${config.server.port}`);
+  logger.info(`服务器已启动：http://localhost:${config.server.port}`);
   startScheduler(config);
 });
 

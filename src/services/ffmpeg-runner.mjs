@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { stat, writeFile, mkdir } from 'node:fs/promises';
+import { stat, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, basename, extname, join } from 'node:path';
 import { audioArgs, buildVideoArgs, videoPresets, getResolutionPreset } from './presets.mjs';
 import { updateJob } from '../controllers/jobs.mjs';
@@ -17,6 +17,7 @@ import {
   persistJobLog,
   pushCommand
 } from './job-log.mjs';
+import logger from './logger.mjs';
 
 const runningChildren = new Map();
 const MAX_VMAF_TUNING_ATTEMPTS = 5;
@@ -55,14 +56,31 @@ export async function probeDuration(ffprobeBin, inputPath, jobLog = null) {
   return new Promise((resolve) => {
     const child = spawn(ffprobeBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
+    let stderr = '';
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
     });
-    child.on('error', () => {
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (err) => {
+      logCommandError(jobLog, {
+        command: formatCommand(ffprobeBin, args),
+        message: `ffprobe 进程启动失败: ${err.message}`,
+        stderr: err.stack,
+        context: 'probeDuration-spawn'
+      });
       resolve(null);
     });
     child.on('close', (code) => {
       if (code !== 0) {
+        logCommandError(jobLog, {
+          command: formatCommand(ffprobeBin, args),
+          message: `ffprobe 退出码 ${code}`,
+          exitCode: code,
+          stderr: stderr.trim() || null,
+          context: 'probeDuration'
+        });
         return resolve(null);
       }
       const val = parseFloat(stdout.trim());
@@ -114,7 +132,7 @@ export async function runJob(job, durationSec, config, jobLog = null) {
         jobLog: log
       });
       if (!result.success) {
-        await finalizeOnFailure(job.id, result);
+        await finalizeOnFailure(job.id, result, log);
         return;
       }
       lastMetrics = result.metrics;
@@ -226,7 +244,7 @@ async function runPerSceneJob(job, durationSec, config, jobLog) {
         status: 'failed',
         error: result.error || `场景 ${scene.index} 编码失败`,
         progress: Math.floor(progressOffset)
-      });
+      }, jobLog);
       return;
     }
     if (result.nextBitrate) {
@@ -247,7 +265,7 @@ async function runPerSceneJob(job, durationSec, config, jobLog) {
   try {
     await concatSceneSegments(config.ffmpeg.bin, segmentFiles, job.output_path, jobLog);
   } catch (error) {
-    await finalizeOnFailure(job.id, { status: 'failed', error: `场景合并失败: ${error.message}` });
+    await finalizeOnFailure(job.id, { status: 'failed', error: `场景合并失败: ${error.message}` }, jobLog);
     return;
   }
 
@@ -256,13 +274,13 @@ async function runPerSceneJob(job, durationSec, config, jobLog) {
   try {
     hlsInfo = await generateHlsOutputs(config.ffmpeg.bin, job.output_path, jobLog);
   } catch (error) {
-    await finalizeOnFailure(job.id, { status: 'failed', error: `HLS 生成失败: ${error.message}` });
+    await finalizeOnFailure(job.id, { status: 'failed', error: `HLS 生成失败: ${error.message}` }, jobLog);
     return;
   }
   try {
     dashInfo = await generateDashOutputs(config.ffmpeg.bin, job.output_path, jobLog);
   } catch (error) {
-    await finalizeOnFailure(job.id, { status: 'failed', error: `DASH 生成失败: ${error.message}` });
+    await finalizeOnFailure(job.id, { status: 'failed', error: `DASH 生成失败: ${error.message}` }, jobLog);
     return;
   }
 
@@ -303,7 +321,11 @@ async function runPerSceneJob(job, durationSec, config, jobLog) {
         config.ffmpeg.bin,
         job.output_path,
         job.input_path,
-        { reportPath: finalReportPath, jobLog }
+        {
+          reportPath: finalReportPath,
+          jobLog,
+          timeout: job.params?.vmafTimeout ?? null
+        }
       );
       finalMetrics.vmafScore = Number(finalVmafStats.mean.toFixed(3));
       finalMetrics.vmafMax = Number(finalVmafStats.max.toFixed(3));
@@ -378,7 +400,7 @@ function decideNextBitrate(current, metrics, targets) {
   return null;
 }
 
-async function finalizeOnFailure(jobId, result) {
+async function finalizeOnFailure(jobId, result, jobLog = null) {
   if (result.status === 'canceled') {
     await updateJob(jobId, {
       status: 'canceled',
@@ -387,11 +409,19 @@ async function finalizeOnFailure(jobId, result) {
     });
     return;
   }
+  const errorMessage = result.error ?? 'ffmpeg 执行失败';
   await updateJob(jobId, {
     status: 'failed',
-    error_msg: result.error ?? 'ffmpeg 执行失败',
+    error_msg: errorMessage,
     progress: result.progress ?? 0
   });
+  if (jobLog) {
+    logCommandError(jobLog, {
+      command: 'ffmpeg',
+      message: errorMessage,
+      context: 'finalizeOnFailure'
+    });
+  }
 }
 
 async function transcodeOnce(job, durationSec, config, options) {
@@ -426,6 +456,7 @@ async function transcodeOnce(job, durationSec, config, options) {
   }
   try {
     const metrics = await collectMetrics(
+      job,
       targetPath,
       job.input_path,
       execution.startTime,
@@ -437,6 +468,12 @@ async function transcodeOnce(job, durationSec, config, options) {
     );
     return { success: true, metrics };
   } catch (error) {
+    logCommandError(jobLog, {
+      command: 'collectMetrics',
+      message: `指标收集失败: ${error.message}`,
+      error: error.stack ?? String(error),
+      context: 'collectMetrics'
+    });
     return {
       success: false,
       status: 'failed',
@@ -551,7 +588,7 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
         if (progress >= lastProgress + 1) {
           lastProgress = progress;
           updateJob(job.id, { progress }).catch((err) => {
-            console.error('进度更新失败', err);
+            logger.error('进度更新失败', err);
           });
         }
       }
@@ -605,6 +642,7 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
 }
 
 async function collectMetrics(
+  job,
   outputPath,
   referencePath,
   startTime,
@@ -624,10 +662,14 @@ async function collectMetrics(
     try {
       const reportPath = `${outputPath}.vmaf.json`;
       const vmafStats = await computeVmafScore(
-        config.ffmpeg.bin,
+        config,
         outputPath,
         referencePath,
-        { reportPath, jobLog }
+        {
+          reportPath,
+          jobLog,
+          timeout: job.params?.vmafTimeout ?? null
+        }
       );
       metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
       metrics.vmafMax = Number(vmafStats.max.toFixed(3));
@@ -939,9 +981,20 @@ export function cancelRunningJob(jobId) {
   return false;
 }
 
-async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options = {}) {
-  const { reportPath = null, jobLog = null } = options;
-  const filterGraph = '[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:log_fmt=json';
+async function computeVmafScore(config, distortedPath, referencePath, options = {}) {
+  const { reportPath = null, jobLog = null, timeout: timeoutSecondsOverride = null } = options;
+  if (!reportPath) {
+    return Promise.reject(new Error('VMAF 报告路径未提供'));
+  }
+
+  const vmafConfig = config.ffmpeg?.vmaf ?? {};
+  const model = vmafConfig.model || 'version=vmaf_v0.6.1';
+  const nThreads = vmafConfig.n_threads || 8;
+  const nSubsample = vmafConfig.n_subsample || 12;
+
+  const filterGraph =
+    `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model=${model}:log_path=${reportPath}:log_fmt=json:n_threads=${nThreads}:n_subsample=${nSubsample}`;
+
   const args = [
     '-i',
     distortedPath,
@@ -953,95 +1006,221 @@ async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options
     'null',
     '-'
   ];
-  const command = pushCommand(jobLog, ffmpegBin, args);
+  const command = pushCommand(jobLog, config.ffmpeg.bin, args);
+
   return new Promise(async (resolve, reject) => {
-    const child = spawn(ffmpegBin, args, {
+    const child = spawn(config.ffmpeg.bin, args, {
       stdio: ['ignore', 'ignore', 'pipe']
     });
-    child.on('error', (err) => {
-      logCommandError(jobLog, {
-        command,
-        message: `VMAF 计算进程启动失败: ${err.message}`,
-        stderr: err.stack,
-        context: 'vmaf-spawn'
-      });
-      reject(new Error(`VMAF 计算进程启动失败: ${err.message}`));
+
+    const timeoutPromise = new Promise((_, rejectTimeout) => {
+      const timeoutSeconds = timeoutSecondsOverride ?? vmafConfig.timeoutSec ?? 300;
+      if (timeoutSeconds <= 0) {
+        return; // A timeout of 0 or less disables it
+      }
+      const timer = setTimeout(() => {
+        if (!child.killed) {
+          child.kill('SIGKILL');
+        }
+        rejectTimeout(new Error('VMAF 计算超时'));
+      }, timeoutSeconds * 1000);
+      child.on('close', () => clearTimeout(timer));
     });
 
-    let stderr = '';
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+    const executionPromise = new Promise(async (resolveExecution) => {
+      child.on('error', (err) => {
+        logCommandError(jobLog, {
+
+          command,
+
+          message: `VMAF 计算进程启动失败: ${err.message}`,
+
+          stderr: err.stack,
+
+          context: 'vmaf-spawn'
+
+        });
+
+        return reject(new Error(`VMAF 计算进程启动失败: ${err.message}`));
+
+      });
+
+
+
+      let stderr = ''; // Keep stderr for potential error logging
+
+      child.stderr.on('data', (chunk) => {
+
+        stderr += chunk.toString();
+
+      });
+
+      const [code] = await once(child, 'close');
+
+      if (code !== 0) {
+
+        const stderrText = stderr.trim();
+
+        logCommandError(jobLog, {
+
+          command,
+
+          message: `VMAF 计算失败，退出码 ${code}`,
+
+          stderr: stderrText || null,
+
+          exitCode: code,
+
+          context: 'vmaf'
+
+        });
+
+        return reject(new Error(`VMAF 计算失败，退出码 ${code}`));
+
+      }
+
+
+
+      let jsonText;
+
+      try {
+
+        jsonText = await readFile(reportPath, 'utf8');
+
+      } catch (readError) {
+
+        logCommandError(jobLog, {
+
+          command,
+
+          message: `VMAF 报告文件读取失败: ${readError.message}`,
+
+          stderr: readError.stack ?? String(readError),
+
+          context: 'vmaf'
+
+        });
+
+        return reject(new Error(`VMAF 报告文件读取失败: ${readError.message}`));
+
+      }
+
+
+
+      let payload;
+
+      try {
+
+        payload = JSON.parse(jsonText);
+
+      } catch (parseError) {
+
+        logCommandError(jobLog, {
+
+          command,
+
+          message: `VMAF 结果 JSON 解析失败: ${parseError.message}`,
+
+          stderr: jsonText, // Log the content that failed to parse
+
+          context: 'vmaf'
+
+        });
+
+        return reject(new Error(`VMAF 结果 JSON 解析失败: ${parseError.message}`));
+
+      }
+
+      
+
+      let aggregateScore;
+
+      const frameScores = Array.isArray(payload?.frames)
+
+        ? payload.frames
+
+            .map((frame) => Number(frame?.metrics?.vmaf))
+
+            .filter((value) => Number.isFinite(value))
+
+        : [];
+
+
+
+      if (payload?.aggregate?.VMAF) {
+
+        aggregateScore = Number(payload.aggregate.VMAF);
+
+      } else if (frameScores.length > 0) {
+
+        const sum = frameScores.reduce((acc, score) => acc + score, 0);
+
+        aggregateScore = sum / frameScores.length;
+
+      } else {
+
+        logCommandError(jobLog, {
+
+          command,
+
+          message: 'VMAF 结果缺少 aggregate.VMAF 且无法从帧分数计算平均值',
+
+          stderr: jsonText,
+
+          context: 'vmaf'
+
+        });
+
+        return reject(new Error('VMAF 结果缺少 aggregate.VMAF 且无法从帧分数计算平均值'));
+
+      }
+
+
+
+      if (!Number.isFinite(aggregateScore)) {
+
+        logCommandError(jobLog, {
+
+          command,
+
+          message: 'VMAF 结果缺少 aggregate.VMAF 或计算出的平均值无效',
+
+          stderr: jsonText,
+
+          context: 'vmaf'
+
+        });
+
+        return reject(new Error('VMAF 结果缺少 aggregate.VMAF 或计算出的平均值无效'));
+
+      }
+
+      const maxScore = frameScores.length ? Math.max(...frameScores) : aggregateScore;
+
+      const minScore = frameScores.length ? Math.min(...frameScores) : aggregateScore;
+
+      // The reportPath is already written by libvmaf, no need to writeFile here.
+
+      resolveExecution({
+
+        mean: aggregateScore,
+
+        max: maxScore,
+
+        min: minScore
+
+      });
+
     });
-    const [code] = await once(child, 'close');
-    if (code !== 0) {
-      const stderrText = stderr.trim();
-      logCommandError(jobLog, {
-        command,
-        message: `VMAF 计算失败，退出码 ${code}`,
-        stderr: stderrText || null,
-        exitCode: code,
-        context: 'vmaf'
-      });
-      return reject(new Error(`VMAF 计算失败，退出码 ${code}`));
-    }
-    const jsonStart = stderr.lastIndexOf('{"version"');
-    if (jsonStart === -1) {
-      logCommandError(jobLog, {
-        command,
-        message: '未能解析 VMAF 结果',
-        stderr: stderr.trim() || null,
-        context: 'vmaf'
-      });
-      return reject(new Error('未能解析 VMAF 结果'));
-    }
-    const jsonSlice = stderr.slice(jsonStart);
-    const jsonEnd = jsonSlice.lastIndexOf('}');
-    if (jsonEnd === -1) {
-      logCommandError(jobLog, {
-        command,
-        message: '未能解析 VMAF 结果',
-        stderr: stderr.trim() || null,
-        context: 'vmaf'
-      });
-      return reject(new Error('未能解析 VMAF 结果'));
-    }
-    const jsonText = jsonSlice.slice(0, jsonEnd + 1);
-    let payload;
-    try {
-      payload = JSON.parse(jsonText);
-    } catch (error) {
-      logCommandError(jobLog, {
-        command,
-        message: `VMAF 结果 JSON 解析失败: ${error.message}`,
-        stderr: stderr.trim() || null,
-        context: 'vmaf'
-      });
-      return reject(new Error(`VMAF 结果 JSON 解析失败: ${error.message}`));
-    }
-    const aggregateScore = Number(payload?.aggregate?.vmaf);
-    if (!Number.isFinite(aggregateScore)) {
-      logCommandError(jobLog, {
-        command,
-        message: 'VMAF 结果缺少 aggregate.vmaf',
-        stderr: stderr.trim() || null,
-        context: 'vmaf'
-      });
-      return reject(new Error('VMAF 结果缺少 aggregate.vmaf'));
-    }
-    const frameScores = Array.isArray(payload?.frames)
-      ? payload.frames
-          .map((frame) => Number(frame?.metrics?.vmaf))
-          .filter((value) => Number.isFinite(value))
-      : [];
-    const maxScore = frameScores.length ? Math.max(...frameScores) : aggregateScore;
-    const minScore = frameScores.length ? Math.min(...frameScores) : aggregateScore;
-    if (reportPath) {
-      await writeFile(reportPath, jsonText, 'utf8');
-    }
-    resolve({
-      mean: aggregateScore,
-      max: maxScore,
-      min: minScore
-    });
+
+
+
+    Promise.race([executionPromise, timeoutPromise])
+
+      .then(resolve)
+
+      .catch(reject);
+
   });
+
 }
