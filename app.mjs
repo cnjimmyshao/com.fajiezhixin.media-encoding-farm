@@ -7,22 +7,7 @@ import morgan from 'morgan';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
-import defaultConfig from './config/default.mjs';
-import apiRoutes from './src/routes/api.mjs';
-import webRoutes from './src/routes/web.mjs';
-import {
-  getNextQueuedJob,
-  hasRunningJob,
-  updateJob
-} from './src/controllers/jobs.mjs';
-import { probeDuration, runJob } from './src/services/ffmpeg-runner.mjs';
-import {
-  createJobLog,
-  logJobInput,
-  persistJobLog
-} from './src/services/job-log.mjs';
-import { prepareJobInput } from './src/services/remote-input.mjs';
+import { startScheduler } from './src/scheduler.mjs';
 import { detectEncoderSupport } from './src/services/hardware-capabilities.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,59 +56,7 @@ app.use((err, req, res, next) => {
 
 const server = app.listen(config.server.port, () => {
   console.log(`服务器已启动：http://localhost:${config.server.port}`);
+  startScheduler(config);
 });
-
-async function schedulerLoop() {
-  while (true) {
-    try {
-      if (await hasRunningJob()) {
-        await delay(2000);
-        continue;
-      }
-      const job = await getNextQueuedJob();
-      if (!job) {
-        await delay(2000);
-        continue;
-      }
-      const jobLog = createJobLog(job.output_path);
-      logJobInput(jobLog, job, { source: 'form_submit' });
-      let prepared;
-      try {
-        prepared = await prepareJobInput(job, config, jobLog);
-      } catch (error) {
-        await updateJob(job.id, {
-          status: 'failed',
-          error_msg: `下载输入文件失败: ${error?.message ?? '未知错误'}`
-        });
-        await persistJobLog(jobLog, job.output_path);
-        continue;
-      }
-      const { job: preparedJob, cleanup } = prepared;
-      try {
-        const duration = await probeDuration(
-          config.ffmpeg.ffprobe,
-          preparedJob.input_path,
-          jobLog
-        );
-        if (duration === null) {
-          await updateJob(job.id, {
-            status: 'failed',
-            error_msg: '无法通过 ffprobe 获取媒体时长'
-          });
-          await persistJobLog(jobLog, job.output_path);
-          continue;
-        }
-        await runJob(preparedJob, duration, config, jobLog);
-      } finally {
-        await cleanup();
-      }
-    } catch (error) {
-      console.error('调度器异常', error);
-    }
-    await delay(2000);
-  }
-}
-
-schedulerLoop();
 
 export default server;

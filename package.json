@@ -4,9 +4,9 @@
   "packageManager": "pnpm@10.19.0",
   "type": "module",
   "scripts": {
-    "start": "node --experimental-sqlite scripts/run-with-env.mjs scripts/boot-app.mjs",
-    "dev": "NODE_ENV=development node --experimental-sqlite scripts/run-with-env.mjs scripts/boot-app.mjs",
-    "migrate": "node --experimental-sqlite scripts/run-with-env.mjs src/db/migrate.mjs"
+    "start": "node --env-file .env --experimental-sqlite scripts/boot-app.mjs",
+    "dev": "NODE_ENV=development node --env-file .env --experimental-sqlite scripts/boot-app.mjs",
+    "migrate": "node --env-file .env --experimental-sqlite src/db/migrate.mjs"
   },
   "dependencies": {
     "express": "^5.0.0",

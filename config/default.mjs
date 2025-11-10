@@ -13,6 +13,9 @@ export const defaultConfig = {
     bin: 'ffmpeg',
     ffprobe: 'ffprobe',
     timeoutFactor: 5
+  },
+  scheduler: {
+    loopInterval: 2000
   }
 };
 
