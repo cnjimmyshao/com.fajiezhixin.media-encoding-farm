@@ -5,8 +5,10 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import { stat, writeFile, mkdir } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { stat, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { dirname, basename, extname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { audioArgs, buildVideoArgs, videoPresets, getResolutionPreset } from './presets.mjs';
 import { updateJob } from '../controllers/jobs.mjs';
 
@@ -16,6 +18,103 @@ const MIN_BITRATE_KBPS = 200;
 const MAX_BITRATE_KBPS = 80000;
 const BITRATE_INCREASE_FACTOR = 1.25;
 const BITRATE_DECREASE_FACTOR = 0.85;
+const HTTP_INPUT_PATTERN = /^https?:\/\//i;
+
+function deriveRemoteInputName(job, urlString) {
+  try {
+    const url = new URL(urlString);
+    const decoded = decodeURIComponent(url.pathname || '');
+    const base = basename(decoded);
+    if (base && base !== '/' && base !== '.' && base !== '..') {
+      const trimmed = base.trim();
+      if (!trimmed) {
+        throw new Error('empty name');
+      }
+      if (extname(trimmed)) {
+        return trimmed;
+      }
+      return `${trimmed}.mp4`;
+    }
+  } catch (error) {
+    // ignore malformed URL and fall back to job based name
+  }
+  const fallbackBase = job?.id ? `${job.id}.mp4` : 'remote-input.mp4';
+  return fallbackBase;
+}
+
+async function safeUnlink(targetPath) {
+  if (!targetPath) return;
+  try {
+    await unlink(targetPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+function normalizeJobLog(jobLog = null, outputPath = null) {
+  if (!jobLog) {
+    return {
+      outputPath: outputPath ?? null,
+      commands: [],
+      errors: [],
+      vmafResults: [],
+      inputs: []
+    };
+  }
+  if (Array.isArray(jobLog)) {
+    return {
+      outputPath: outputPath ?? null,
+      commands: jobLog,
+      errors: [],
+      vmafResults: [],
+      inputs: []
+    };
+  }
+  if (!Array.isArray(jobLog.commands)) {
+    jobLog.commands = [];
+  }
+  if (!Array.isArray(jobLog.errors)) {
+    jobLog.errors = [];
+  }
+  if (!Array.isArray(jobLog.vmafResults)) {
+    jobLog.vmafResults = [];
+  }
+  if (!Array.isArray(jobLog.inputs)) {
+    jobLog.inputs = [];
+  }
+  if (outputPath && !jobLog.outputPath) {
+    jobLog.outputPath = outputPath;
+  }
+  return jobLog;
+}
+
+export function createJobLog(outputPath = null) {
+  return normalizeJobLog(null, outputPath);
+}
+
+function logVmafResult(jobLog, payload) {
+  if (!jobLog) return;
+  const target = normalizeJobLog(jobLog);
+  target.vmafResults.push({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+}
+
+function buildVmafContext(timeSlice = null, label = 'segment') {
+  if (!timeSlice) {
+    return { type: label };
+  }
+  return {
+    type: label,
+    index: timeSlice.index ?? null,
+    start: timeSlice.start ?? null,
+    end: timeSlice.end ?? null,
+    duration: timeSlice.duration ?? null
+  };
+}
 
 function formatCommand(bin, args = []) {
   const escapeArg = (arg) => {
@@ -28,15 +127,225 @@ function formatCommand(bin, args = []) {
   return [bin, ...args].map(escapeArg).join(' ').trim();
 }
 
-function pushCommand(commandLog, bin, args) {
-  if (!commandLog) return;
-  commandLog.push(formatCommand(bin, args));
+function pushCommand(jobLog, bin, args) {
+  const entry = formatCommand(bin, args);
+  if (!jobLog) return entry;
+  if (Array.isArray(jobLog)) {
+    jobLog.push(entry);
+    return entry;
+  }
+  const target = normalizeJobLog(jobLog);
+  target.commands.push(entry);
+  return entry;
 }
 
-async function writeCommandLog(outputPath, commands) {
-  if (!commands || !commands.length) return;
-  const logPath = `${outputPath}.commands.log`;
-  await writeFile(logPath, commands.join('\n'), 'utf8');
+function logCommandError(jobLog, payload) {
+  if (!jobLog) return;
+  const target = normalizeJobLog(jobLog);
+  target.errors.push({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+}
+
+function cloneJobParams(params = {}) {
+  if (!params || typeof params !== 'object') {
+    return {};
+  }
+  try {
+    return JSON.parse(JSON.stringify(params));
+  } catch (error) {
+    const cloned = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined) continue;
+      cloned[key] = value;
+    }
+    return cloned;
+  }
+}
+
+function sanitizeJobInputPayload(job) {
+  if (!job || typeof job !== 'object') {
+    return null;
+  }
+  const params = cloneJobParams(job.params);
+  const payload = {
+    jobId: job.id ?? null,
+    inputPath: job.input_path ?? job.inputPath ?? null,
+    outputPath: job.output_path ?? job.outputPath ?? null,
+    codec: job.codec ?? null,
+    impl: job.impl ?? null,
+    params
+  };
+  return payload;
+}
+
+export function logJobInput(jobLog, job, options = {}) {
+  if (!jobLog) return;
+  const payload = sanitizeJobInputPayload(job);
+  if (!payload) {
+    return;
+  }
+  const target = normalizeJobLog(jobLog);
+  target.inputs.push({
+    timestamp: new Date().toISOString(),
+    source: options.source ?? 'request',
+    payload
+  });
+}
+
+export async function prepareJobInput(job, config, jobLog = null) {
+  if (!job || !job.input_path || !HTTP_INPUT_PATTERN.test(job.input_path)) {
+    return { job, cleanup: async () => {} };
+  }
+  const workspace = config?.paths?.workspace ?? '/tmp/vef';
+  const downloadsDir = join(workspace, 'downloads');
+  await mkdir(downloadsDir, { recursive: true });
+  const remoteName = deriveRemoteInputName(job, job.input_path);
+  const localPath = join(downloadsDir, `${job.id ?? 'job'}-${remoteName}`);
+  const commandEntry = pushCommand(jobLog, 'download', [job.input_path, localPath]);
+
+  try {
+    const response = await fetch(job.input_path);
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+    }
+    await pipeline(response.body, createWriteStream(localPath));
+  } catch (error) {
+    logCommandError(jobLog, {
+      command: commandEntry,
+      message: error?.message ?? '下载输入文件失败',
+      context: 'download_input'
+    });
+    await safeUnlink(localPath);
+    throw error;
+  }
+
+  const preparedJob = {
+    ...job,
+    input_path: localPath,
+    original_input_path: job.original_input_path ?? job.input_path
+  };
+
+  return {
+    job: preparedJob,
+    cleanup: async () => {
+      await safeUnlink(localPath);
+    }
+  };
+}
+
+export async function persistJobLog(jobLog, fallbackOutputPath = null) {
+  if (!jobLog) return;
+  const normalized = normalizeJobLog(jobLog, fallbackOutputPath);
+  const outputPath = normalized.outputPath ?? fallbackOutputPath;
+  if (!outputPath) {
+    return;
+  }
+  try {
+    await mkdir(dirname(outputPath), { recursive: true });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+  const commands = Array.isArray(normalized.commands) ? normalized.commands : [];
+  const errors = Array.isArray(normalized.errors) ? normalized.errors : [];
+  const vmafResults = Array.isArray(normalized.vmafResults) ? normalized.vmafResults : [];
+  const inputs = Array.isArray(normalized.inputs) ? normalized.inputs : [];
+
+  if (commands.length) {
+    const commandLogPath = `${outputPath}.commands.log`;
+    await writeFile(commandLogPath, commands.join('\n'), 'utf8');
+  }
+
+  if (!commands.length && !vmafResults.length && !errors.length && !inputs.length) {
+    return;
+  }
+
+  const lines = [];
+  lines.push('# Job Execution Log');
+  lines.push(`generated_at: ${new Date().toISOString()}`);
+  lines.push('');
+
+  if (inputs.length) {
+    lines.push('## User Inputs');
+    for (const entry of inputs) {
+      const parts = [];
+      if (entry.source) parts.push(`source=${entry.source}`);
+      if (entry.payload?.jobId) parts.push(`job_id=${entry.payload.jobId}`);
+      const detail = parts.length ? ` ${parts.join(', ')}` : '';
+      lines.push(`- [${entry.timestamp}]${detail}`);
+      const serialized = JSON.stringify(entry.payload ?? {}, null, 2);
+      const serializedLines = serialized.split('\n');
+      for (const line of serializedLines) {
+        lines.push(`  ${line}`);
+      }
+    }
+    lines.push('');
+  }
+
+  if (commands.length) {
+    lines.push('## Commands');
+    for (const command of commands) {
+      lines.push(command);
+    }
+    lines.push('');
+  }
+
+  if (errors.length) {
+    lines.push('## Errors');
+    for (const entry of errors) {
+      const parts = [];
+      if (entry.command) parts.push(`command=${entry.command}`);
+      if (entry.message) parts.push(`message=${entry.message}`);
+      if (entry.stderr) {
+        const sanitizedStderr = String(entry.stderr).replace(/\s+/g, ' ').trim();
+        if (sanitizedStderr) {
+          parts.push(`stderr=${sanitizedStderr}`);
+        }
+      }
+      if (entry.exitCode !== undefined && entry.exitCode !== null) {
+        parts.push(`exit_code=${entry.exitCode}`);
+      }
+      if (entry.signal) parts.push(`signal=${entry.signal}`);
+      if (entry.context) parts.push(`context=${entry.context}`);
+      const detail = parts.length ? ` ${parts.join(', ')}` : '';
+      lines.push(`- [${entry.timestamp}]${detail}`);
+    }
+    lines.push('');
+  }
+
+  if (vmafResults.length) {
+    lines.push('## VMAF Results');
+    for (const entry of vmafResults) {
+      const parts = [];
+      if (entry.targetPath) parts.push(`target=${entry.targetPath}`);
+      if (entry.referencePath) parts.push(`reference=${entry.referencePath}`);
+      if (entry.reportPath) parts.push(`report=${entry.reportPath}`);
+      if (entry.context) {
+        const contextItems = Object.entries(entry.context)
+          .filter(([, value]) => value !== null && value !== undefined)
+          .map(([key, value]) => `${key}=${value}`);
+        if (contextItems.length) {
+          parts.push(`context{${contextItems.join(', ')}}`);
+        }
+      }
+      if (entry.error) {
+        parts.push(`error=${entry.error}`);
+      } else {
+        if (Number.isFinite(entry.mean)) parts.push(`mean=${entry.mean}`);
+        if (Number.isFinite(entry.min)) parts.push(`min=${entry.min}`);
+        if (Number.isFinite(entry.max)) parts.push(`max=${entry.max}`);
+      }
+      const detail = parts.length ? ` ${parts.join(', ')}` : '';
+      lines.push(`- [${entry.timestamp}]${detail}`);
+    }
+    lines.push('');
+  }
+
+  const summaryPath = `${outputPath}.log`;
+  await writeFile(summaryPath, lines.join('\n'), 'utf8');
 }
 
 /**
@@ -55,8 +364,8 @@ function parseFfmpegTime(timeStr) {
  * @param {string} inputPath 输入路径
  * @returns {Promise<number|null>} 秒数
  */
-export async function probeDuration(ffprobeBin, inputPath) {
-  const child = spawn(ffprobeBin, [
+export async function probeDuration(ffprobeBin, inputPath, jobLog = null) {
+  const args = [
     '-v',
     'error',
     '-show_entries',
@@ -64,7 +373,9 @@ export async function probeDuration(ffprobeBin, inputPath) {
     '-of',
     'default=noprint_wrappers=1:nokey=1',
     inputPath
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  ];
+  pushCommand(jobLog, ffprobeBin, args);
+  const child = spawn(ffprobeBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
   let stdout = '';
   child.stdout.on('data', (chunk) => {
@@ -85,106 +396,109 @@ export async function probeDuration(ffprobeBin, inputPath) {
  * @param {number|null} durationSec 时长
  * @param {object} config 配置
  */
-export async function runJob(job, durationSec, config) {
+export async function runJob(job, durationSec, config, jobLog = null) {
   await updateJob(job.id, { status: 'running', progress: 0, error_msg: null });
-  const commandLog = [];
+  const log = normalizeJobLog(jobLog, job.output_path);
 
-  if (job.params?.perScene) {
-    await runPerSceneJob(job, durationSec, config, commandLog);
-    return;
-  }
-
-  const scalePreset = getResolutionPreset(job.params?.scale ?? 'source');
-  let requestedBitrate = Number(job.params?.bitrateKbps);
-  const hasValidBitrate = Number.isFinite(requestedBitrate) && requestedBitrate > 0;
-  const qualityMode = job.params?.qualityMode === 'bitrate' && hasValidBitrate ? 'bitrate' : 'crf';
-  let currentBitrate = qualityMode === 'bitrate'
-    ? Math.max(MIN_BITRATE_KBPS, Math.min(MAX_BITRATE_KBPS, Math.round(requestedBitrate)))
-    : null;
-  const vmafTargets = qualityMode === 'bitrate' ? parseVmafTargets(job.params) : null;
-  const adaptiveVmaf = Boolean(vmafTargets && currentBitrate);
-  const enableVmaf = Boolean(job.params?.enableVmaf || adaptiveVmaf);
-  const maxAttempts = adaptiveVmaf ? MAX_VMAF_TUNING_ATTEMPTS : 1;
-  const history = [];
-  let attempt = 0;
-  let lastMetrics = null;
-
-  while (attempt < maxAttempts) {
-    attempt += 1;
-    const qualityOverride = qualityMode === 'bitrate'
-      ? buildBitrateOverride(currentBitrate)
-      : null;
-    const result = await transcodeOnce(job, durationSec, config, {
-      qualityOverride,
-      scalePreset,
-      enableVmaf,
-      commandLog
-    });
-    if (!result.success) {
-      await finalizeOnFailure(job.id, result);
+  try {
+    if (job.params?.perScene) {
+      await runPerSceneJob(job, durationSec, config, log);
       return;
     }
-    lastMetrics = result.metrics;
-    if (qualityMode === 'bitrate' && qualityOverride?.bitrateKbps) {
-      lastMetrics.usedBitrateKbps = qualityOverride.bitrateKbps;
-    }
-    if (adaptiveVmaf && result.metrics?.vmafScore) {
-      history.push({
-        attempt,
-        bitrateKbps: qualityOverride?.bitrateKbps ?? currentBitrate,
-        vmafScore: result.metrics.vmafScore,
-        vmafMin: result.metrics.vmafMin,
-        vmafMax: result.metrics.vmafMax
+
+    const scalePreset = getResolutionPreset(job.params?.scale ?? 'source');
+    let requestedBitrate = Number(job.params?.bitrateKbps);
+    const hasValidBitrate = Number.isFinite(requestedBitrate) && requestedBitrate > 0;
+    const qualityMode = job.params?.qualityMode === 'bitrate' && hasValidBitrate ? 'bitrate' : 'crf';
+    let currentBitrate = qualityMode === 'bitrate'
+      ? Math.max(MIN_BITRATE_KBPS, Math.min(MAX_BITRATE_KBPS, Math.round(requestedBitrate)))
+      : null;
+    const vmafTargets = qualityMode === 'bitrate' ? parseVmafTargets(job.params) : null;
+    const adaptiveVmaf = Boolean(vmafTargets && currentBitrate);
+    const enableVmaf = Boolean(job.params?.enableVmaf || adaptiveVmaf);
+    const maxAttempts = adaptiveVmaf ? MAX_VMAF_TUNING_ATTEMPTS : 1;
+    const history = [];
+    let attempt = 0;
+    let lastMetrics = null;
+
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      const qualityOverride = qualityMode === 'bitrate'
+        ? buildBitrateOverride(currentBitrate)
+        : null;
+      const result = await transcodeOnce(job, durationSec, config, {
+        qualityOverride,
+        scalePreset,
+        enableVmaf,
+        jobLog: log
       });
-      const nextBitrate = decideNextBitrate(
-        qualityOverride?.bitrateKbps ?? currentBitrate,
-        result.metrics,
-        vmafTargets
-      );
-      if (nextBitrate && nextBitrate !== currentBitrate) {
-        currentBitrate = nextBitrate;
-        continue;
+      if (!result.success) {
+        await finalizeOnFailure(job.id, result);
+        return;
+      }
+      lastMetrics = result.metrics;
+      if (qualityMode === 'bitrate' && qualityOverride?.bitrateKbps) {
+        lastMetrics.usedBitrateKbps = qualityOverride.bitrateKbps;
+      }
+      if (adaptiveVmaf && result.metrics?.vmafScore) {
+        history.push({
+          attempt,
+          bitrateKbps: qualityOverride?.bitrateKbps ?? currentBitrate,
+          vmafScore: result.metrics.vmafScore,
+          vmafMin: result.metrics.vmafMin,
+          vmafMax: result.metrics.vmafMax
+        });
+        const nextBitrate = decideNextBitrate(
+          qualityOverride?.bitrateKbps ?? currentBitrate,
+          result.metrics,
+          vmafTargets
+        );
+        if (nextBitrate && nextBitrate !== currentBitrate) {
+          currentBitrate = nextBitrate;
+          continue;
+        }
+      }
+      break;
+    }
+
+    if (!lastMetrics) {
+      await updateJob(job.id, {
+        status: 'failed',
+        error_msg: '编码未产生指标结果'
+      });
+      return;
+    }
+
+    if (history.length) {
+      lastMetrics.vmafTuningHistory = history;
+      lastMetrics.targetVmaf = vmafTargets;
+      const finalScore = lastMetrics.vmafScore;
+      if (
+        finalScore !== undefined &&
+        finalScore !== null &&
+        vmafTargets &&
+        (finalScore < vmafTargets.min || finalScore > vmafTargets.max)
+      ) {
+        lastMetrics.vmafNote = '已达到最大调整次数，仍未进入目标范围';
       }
     }
-    break;
-  }
 
-  if (!lastMetrics) {
     await updateJob(job.id, {
-      status: 'failed',
-      error_msg: '编码未产生指标结果'
+      status: 'success',
+      progress: 100,
+      metrics_json: lastMetrics
     });
-    return;
+  } finally {
+    await persistJobLog(log, job.output_path);
   }
-
-  if (history.length) {
-    lastMetrics.vmafTuningHistory = history;
-    lastMetrics.targetVmaf = vmafTargets;
-    const finalScore = lastMetrics.vmafScore;
-    if (
-      finalScore !== undefined &&
-      finalScore !== null &&
-      vmafTargets &&
-      (finalScore < vmafTargets.min || finalScore > vmafTargets.max)
-    ) {
-      lastMetrics.vmafNote = '已达到最大调整次数，仍未进入目标范围';
-    }
-  }
-
-  await updateJob(job.id, {
-    status: 'success',
-    progress: 100,
-    metrics_json: lastMetrics
-  });
-  await writeCommandLog(job.output_path, commandLog);
 }
 
-async function runPerSceneJob(job, durationSec, config, commandLog) {
+async function runPerSceneJob(job, durationSec, config, jobLog) {
   const scalePreset = getResolutionPreset(job.params?.scale ?? 'source');
   const threshold = Number.isFinite(Number(job.params?.sceneThreshold))
     ? Math.max(0.01, Math.min(1, Number(job.params.sceneThreshold)))
     : 0.4;
-  const cuts = await detectSceneCuts(config.ffmpeg.bin, job.input_path, threshold, commandLog);
+  const cuts = await detectSceneCuts(config.ffmpeg.bin, job.input_path, threshold, jobLog);
   const scenes = buildSceneTimeline(cuts, durationSec);
   if (!scenes.length) {
     scenes.push({ index: 1, start: 0, end: durationSec ?? 0, duration: durationSec ?? 0 });
@@ -224,7 +538,7 @@ async function runPerSceneJob(job, durationSec, config, commandLog) {
         scale: progressScale,
         duration: scene.duration
       },
-      commandLog
+      jobLog
     });
     if (!result.success) {
       await finalizeOnFailure(job.id, {
@@ -250,7 +564,7 @@ async function runPerSceneJob(job, durationSec, config, commandLog) {
 
   const segmentFiles = sceneMetrics.map((item) => item.output);
   try {
-    await concatSceneSegments(config.ffmpeg.bin, segmentFiles, job.output_path, commandLog);
+    await concatSceneSegments(config.ffmpeg.bin, segmentFiles, job.output_path, jobLog);
   } catch (error) {
     await finalizeOnFailure(job.id, { status: 'failed', error: `场景合并失败: ${error.message}` });
     return;
@@ -259,13 +573,13 @@ async function runPerSceneJob(job, durationSec, config, commandLog) {
   let hlsInfo = null;
   let dashInfo = null;
   try {
-    hlsInfo = await generateHlsOutputs(config.ffmpeg.bin, job.output_path, commandLog);
+    hlsInfo = await generateHlsOutputs(config.ffmpeg.bin, job.output_path, jobLog);
   } catch (error) {
     await finalizeOnFailure(job.id, { status: 'failed', error: `HLS 生成失败: ${error.message}` });
     return;
   }
   try {
-    dashInfo = await generateDashOutputs(config.ffmpeg.bin, job.output_path, commandLog);
+    dashInfo = await generateDashOutputs(config.ffmpeg.bin, job.output_path, jobLog);
   } catch (error) {
     await finalizeOnFailure(job.id, { status: 'failed', error: `DASH 生成失败: ${error.message}` });
     return;
@@ -308,13 +622,28 @@ async function runPerSceneJob(job, durationSec, config, commandLog) {
         config.ffmpeg.bin,
         job.output_path,
         job.input_path,
-        { reportPath: finalReportPath, commandLog }
+        { reportPath: finalReportPath, jobLog }
       );
       finalMetrics.vmafScore = Number(finalVmafStats.mean.toFixed(3));
       finalMetrics.vmafMax = Number(finalVmafStats.max.toFixed(3));
       finalMetrics.vmafMin = Number(finalVmafStats.min.toFixed(3));
+      logVmafResult(jobLog, {
+        targetPath: job.output_path,
+        referencePath: job.input_path,
+        reportPath: finalReportPath,
+        mean: finalMetrics.vmafScore,
+        max: finalMetrics.vmafMax,
+        min: finalMetrics.vmafMin,
+        context: buildVmafContext(null, 'final-output')
+      });
     } catch (error) {
       finalMetrics.vmafError = error.message;
+      logVmafResult(jobLog, {
+        targetPath: job.output_path,
+        referencePath: job.input_path,
+        context: buildVmafContext(null, 'final-output'),
+        error: error.message
+      });
     }
   }
 
@@ -323,7 +652,6 @@ async function runPerSceneJob(job, durationSec, config, commandLog) {
     progress: 100,
     metrics_json: finalMetrics
   });
-  await writeCommandLog(job.output_path, commandLog);
 }
 
 
@@ -393,7 +721,7 @@ async function transcodeOnce(job, durationSec, config, options) {
     targetPath = job.output_path,
     timeSlice = null,
     progressTracker = null,
-    commandLog = null
+    jobLog: jobLogOption = null
   } = options;
   const segmentDuration = timeSlice?.duration ?? durationSec;
   const ffmpegArgs = buildFfmpegArgs(
@@ -403,13 +731,14 @@ async function transcodeOnce(job, durationSec, config, options) {
     timeSlice,
     targetPath
   );
+  const jobLog = normalizeJobLog(jobLogOption);
   const execution = await runFfmpegProcess(
     job,
     segmentDuration,
     config,
     ffmpegArgs,
     progressTracker,
-    commandLog
+    jobLog
   );
   if (!execution.success) {
     return execution;
@@ -422,7 +751,8 @@ async function transcodeOnce(job, durationSec, config, options) {
       segmentDuration,
       config,
       enableVmaf,
-      commandLog
+      jobLog,
+      buildVmafContext(timeSlice, 'segment')
     );
     return { success: true, metrics };
   } catch (error) {
@@ -486,9 +816,9 @@ function buildFfmpegArgs(job, qualityOverride, scalePreset, timeSlice, targetPat
   return ffmpegArgs;
 }
 
-async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTracker, commandLog) {
+async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTracker, jobLog) {
   const startTime = Date.now();
-  pushCommand(commandLog, config.ffmpeg.bin, ffmpegArgs);
+  const command = pushCommand(jobLog, config.ffmpeg.bin, ffmpegArgs);
   const child = spawn(config.ffmpeg.bin, ffmpegArgs, {
     stdio: ['ignore', 'ignore', 'pipe']
   });
@@ -506,6 +836,10 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
   }
 
   let lastProgress = 0;
+  let stderrBuffer = '';
+  child.stderr.on('data', (chunk) => {
+    stderrBuffer += chunk.toString();
+  });
   const rl = createInterface({ input: child.stderr });
   rl.on('line', (line) => {
     const timeMatch = /time=([0-9:.]+)/.exec(line);
@@ -537,10 +871,19 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
     clearTimeout(timeoutTimer);
   }
 
+  const stderrText = stderrBuffer.trim();
+
   if (signal === 'SIGTERM') {
     return { success: false, status: 'canceled', progress: lastProgress };
   }
   if (signal === 'SIGKILL') {
+    logCommandError(jobLog, {
+      command,
+      message: '任务执行超时并被终止',
+      signal,
+      stderr: stderrText || null,
+      context: 'transcode'
+    });
     return {
       success: false,
       status: 'failed',
@@ -549,6 +892,14 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
     };
   }
   if (code !== 0) {
+    logCommandError(jobLog, {
+      command,
+      message: `ffmpeg 退出码 ${code}`,
+      exitCode: code,
+      signal,
+      stderr: stderrText || null,
+      context: 'transcode'
+    });
     return {
       success: false,
       status: 'failed',
@@ -559,7 +910,16 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
   return { success: true, startTime, progress: lastProgress };
 }
 
-async function collectMetrics(outputPath, referencePath, startTime, durationSec, config, enableVmaf, commandLog) {
+async function collectMetrics(
+  outputPath,
+  referencePath,
+  startTime,
+  durationSec,
+  config,
+  enableVmaf,
+  jobLog,
+  context = null
+) {
   const fileStat = await stat(outputPath);
   const encodeDurationSec = Number(((Date.now() - startTime) / 1000).toFixed(3));
   const metrics = { sizeBytes: fileStat.size, encodeDurationSec };
@@ -573,13 +933,28 @@ async function collectMetrics(outputPath, referencePath, startTime, durationSec,
         config.ffmpeg.bin,
         outputPath,
         referencePath,
-        { reportPath, commandLog }
+        { reportPath, jobLog }
       );
       metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
       metrics.vmafMax = Number(vmafStats.max.toFixed(3));
       metrics.vmafMin = Number(vmafStats.min.toFixed(3));
+      logVmafResult(jobLog, {
+        targetPath: outputPath,
+        referencePath,
+        reportPath,
+        mean: metrics.vmafScore,
+        max: metrics.vmafMax,
+        min: metrics.vmafMin,
+        context
+      });
     } catch (error) {
       metrics.vmafError = error.message;
+      logVmafResult(jobLog, {
+        targetPath: outputPath,
+        referencePath,
+        context,
+        error: error.message
+      });
     }
   }
   return metrics;
@@ -594,7 +969,7 @@ async function encodeSceneSegment(job, durationSec, config, options) {
     qualityMode,
     initialBitrate,
     progressTracker,
-    commandLog
+    jobLog
   } = options;
   let attempt = 0;
   let bitrate = initialBitrate;
@@ -612,7 +987,7 @@ async function encodeSceneSegment(job, durationSec, config, options) {
       targetPath,
       timeSlice: scene,
       progressTracker,
-      commandLog
+      jobLog
     });
     if (!result.success) {
       return { success: false, error: result.error };
@@ -669,7 +1044,7 @@ function isVmafWithin(metrics, targets) {
   return score >= targets.min && score <= targets.max;
 }
 
-async function detectSceneCuts(ffmpegBin, inputPath, threshold, commandLog) {
+async function detectSceneCuts(ffmpegBin, inputPath, threshold, jobLog) {
   return new Promise((resolve) => {
     const filterExpr = `select='gt(scene,${threshold})',showinfo`;
     const args = [
@@ -682,7 +1057,7 @@ async function detectSceneCuts(ffmpegBin, inputPath, threshold, commandLog) {
       'null',
       '-'
     ];
-    pushCommand(commandLog, ffmpegBin, args);
+    pushCommand(jobLog, ffmpegBin, args);
     const child = spawn(ffmpegBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     const cuts = [];
     child.stderr.on('data', (chunk) => {
@@ -737,17 +1112,17 @@ function buildSceneTimeline(cuts, durationSec) {
   return timeline;
 }
 
-async function concatSceneSegments(ffmpegBin, files, outputPath, commandLog) {
+async function concatSceneSegments(ffmpegBin, files, outputPath, jobLog) {
   const listContent = files
     .map((file) => `file '${file.replace(/'/g, "'\\''")}'`)
     .join('\n');
   const listPath = `${outputPath}.concat.txt`;
   await writeFile(listPath, listContent, 'utf8');
   const args = ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outputPath];
-  await runExternalFfmpeg(ffmpegBin, args, commandLog);
+  await runExternalFfmpeg(ffmpegBin, args, jobLog);
 }
 
-async function generateHlsOutputs(ffmpegBin, sourcePath, commandLog) {
+async function generateHlsOutputs(ffmpegBin, sourcePath, jobLog) {
   const outputDir = dirname(sourcePath);
   const baseName = basename(sourcePath, extname(sourcePath)) || 'output';
   const hlsDir = join(outputDir, `${baseName}-hls`);
@@ -770,11 +1145,11 @@ async function generateHlsOutputs(ffmpegBin, sourcePath, commandLog) {
     segmentPattern,
     playlistPath
   ];
-  await runExternalFfmpeg(ffmpegBin, args, commandLog);
+  await runExternalFfmpeg(ffmpegBin, args, jobLog);
   return { playlist: playlistPath };
 }
 
-async function generateDashOutputs(ffmpegBin, sourcePath, commandLog) {
+async function generateDashOutputs(ffmpegBin, sourcePath, jobLog) {
   const outputDir = dirname(sourcePath);
   const baseName = basename(sourcePath, extname(sourcePath)) || 'output';
   const dashDir = join(outputDir, `${baseName}-dash`);
@@ -798,12 +1173,12 @@ async function generateDashOutputs(ffmpegBin, sourcePath, commandLog) {
     `${baseName}-\$RepresentationID\$-\$Number%05d\$.m4s`,
     manifestPath
   ];
-  await runExternalFfmpeg(ffmpegBin, args, commandLog);
+  await runExternalFfmpeg(ffmpegBin, args, jobLog);
   return { manifest: manifestPath };
 }
 
-async function runExternalFfmpeg(ffmpegBin, args, commandLog) {
-  pushCommand(commandLog, ffmpegBin, args);
+async function runExternalFfmpeg(ffmpegBin, args, jobLog) {
+  const command = pushCommand(jobLog, ffmpegBin, args);
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpegBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
@@ -814,10 +1189,25 @@ async function runExternalFfmpeg(ffmpegBin, args, commandLog) {
       if (code === 0) {
         resolve(true);
       } else {
-        reject(new Error(stderr.trim() || `ffmpeg 退出码 ${code}`));
+        const stderrText = stderr.trim();
+        logCommandError(jobLog, {
+          command,
+          message: stderrText || `ffmpeg 退出码 ${code}`,
+          stderr: stderrText || null,
+          exitCode: code,
+          context: 'external'
+        });
+        reject(new Error(stderrText || `ffmpeg 退出码 ${code}`));
       }
     });
-    child.on('error', (error) => reject(error));
+    child.on('error', (error) => {
+      logCommandError(jobLog, {
+        command,
+        message: error.message,
+        context: 'external'
+      });
+      reject(error);
+    });
   });
 }
 
@@ -856,7 +1246,7 @@ export function cancelRunningJob(jobId) {
 }
 
 async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options = {}) {
-  const { reportPath = null, commandLog = null } = options;
+  const { reportPath = null, jobLog = null } = options;
   const filterGraph = '[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model=version=vmaf_v0.6.1:log_fmt=json';
   const args = [
     '-i',
@@ -869,7 +1259,7 @@ async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options
     'null',
     '-'
   ];
-  pushCommand(commandLog, ffmpegBin, args);
+  const command = pushCommand(jobLog, ffmpegBin, args);
   const child = spawn(ffmpegBin, args, {
     stdio: ['ignore', 'ignore', 'pipe']
   });
@@ -879,15 +1269,35 @@ async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options
   });
   const [code] = await once(child, 'close');
   if (code !== 0) {
+    const stderrText = stderr.trim();
+    logCommandError(jobLog, {
+      command,
+      message: `VMAF 计算失败，退出码 ${code}`,
+      stderr: stderrText || null,
+      exitCode: code,
+      context: 'vmaf'
+    });
     throw new Error(`VMAF 计算失败，退出码 ${code}`);
   }
   const jsonStart = stderr.lastIndexOf('{"version"');
   if (jsonStart === -1) {
+    logCommandError(jobLog, {
+      command,
+      message: '未能解析 VMAF 结果',
+      stderr: stderr.trim() || null,
+      context: 'vmaf'
+    });
     throw new Error('未能解析 VMAF 结果');
   }
   const jsonSlice = stderr.slice(jsonStart);
   const jsonEnd = jsonSlice.lastIndexOf('}');
   if (jsonEnd === -1) {
+    logCommandError(jobLog, {
+      command,
+      message: '未能解析 VMAF 结果',
+      stderr: stderr.trim() || null,
+      context: 'vmaf'
+    });
     throw new Error('未能解析 VMAF 结果');
   }
   const jsonText = jsonSlice.slice(0, jsonEnd + 1);
@@ -895,10 +1305,22 @@ async function computeVmafScore(ffmpegBin, distortedPath, referencePath, options
   try {
     payload = JSON.parse(jsonText);
   } catch (error) {
+    logCommandError(jobLog, {
+      command,
+      message: `VMAF 结果 JSON 解析失败: ${error.message}`,
+      stderr: stderr.trim() || null,
+      context: 'vmaf'
+    });
     throw new Error(`VMAF 结果 JSON 解析失败: ${error.message}`);
   }
   const aggregateScore = Number(payload?.aggregate?.vmaf);
   if (!Number.isFinite(aggregateScore)) {
+    logCommandError(jobLog, {
+      command,
+      message: 'VMAF 结果缺少 aggregate.vmaf',
+      stderr: stderr.trim() || null,
+      context: 'vmaf'
+    });
     throw new Error('VMAF 结果缺少 aggregate.vmaf');
   }
   const frameScores = Array.isArray(payload?.frames)

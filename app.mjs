@@ -16,7 +16,14 @@ import {
   hasRunningJob,
   updateJob
 } from './src/controllers/jobs.mjs';
-import { probeDuration, runJob } from './src/services/ffmpeg-runner.mjs';
+import {
+  probeDuration,
+  runJob,
+  createJobLog,
+  persistJobLog,
+  logJobInput,
+  prepareJobInput
+} from './src/services/ffmpeg-runner.mjs';
 import { detectEncoderSupport } from './src/services/hardware-capabilities.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -79,15 +86,38 @@ async function schedulerLoop() {
         await delay(2000);
         continue;
       }
-      const duration = await probeDuration(config.ffmpeg.ffprobe, job.input_path);
-      if (duration === null) {
+      const jobLog = createJobLog(job.output_path);
+      logJobInput(jobLog, job, { source: 'form_submit' });
+      let prepared;
+      try {
+        prepared = await prepareJobInput(job, config, jobLog);
+      } catch (error) {
         await updateJob(job.id, {
           status: 'failed',
-          error_msg: '无法通过 ffprobe 获取媒体时长'
+          error_msg: `下载输入文件失败: ${error?.message ?? '未知错误'}`
         });
+        await persistJobLog(jobLog, job.output_path);
         continue;
       }
-      await runJob(job, duration, config);
+      const { job: preparedJob, cleanup } = prepared;
+      try {
+        const duration = await probeDuration(
+          config.ffmpeg.ffprobe,
+          preparedJob.input_path,
+          jobLog
+        );
+        if (duration === null) {
+          await updateJob(job.id, {
+            status: 'failed',
+            error_msg: '无法通过 ffprobe 获取媒体时长'
+          });
+          await persistJobLog(jobLog, job.output_path);
+          continue;
+        }
+        await runJob(preparedJob, duration, config, jobLog);
+      } finally {
+        await cleanup();
+      }
     } catch (error) {
       console.error('调度器异常', error);
     }
