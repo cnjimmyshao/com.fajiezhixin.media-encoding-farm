@@ -16,14 +16,13 @@ import {
   hasRunningJob,
   updateJob
 } from './src/controllers/jobs.mjs';
+import { probeDuration, runJob } from './src/services/ffmpeg-runner.mjs';
 import {
-  probeDuration,
-  runJob,
   createJobLog,
-  persistJobLog,
   logJobInput,
-  prepareJobInput
-} from './src/services/ffmpeg-runner.mjs';
+  persistJobLog
+} from './src/services/job-log.mjs';
+import { prepareJobInput } from './src/services/remote-input.mjs';
 import { detectEncoderSupport } from './src/services/hardware-capabilities.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
