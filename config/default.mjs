@@ -17,7 +17,8 @@ export const defaultConfig = {
       timeoutSec: 300,
       model: 'version=vmaf_v0.6.1',
       n_threads: 8,
-      n_subsample: 12
+      n_subsample: 12,
+      fps: 2
     }
   },
   scheduler: {

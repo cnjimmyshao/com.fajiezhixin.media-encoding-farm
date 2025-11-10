@@ -42,6 +42,9 @@ function buildConfig() {
   if (process.env.VMAF_N_SUBSAMPLE) {
     config.ffmpeg.vmaf.n_subsample = Number(process.env.VMAF_N_SUBSAMPLE);
   }
+  if (process.env.VMAF_FPS) {
+    config.ffmpeg.vmaf.fps = Number(process.env.VMAF_FPS);
+  }
   return config;
 }
 

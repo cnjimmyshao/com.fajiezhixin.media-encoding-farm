@@ -991,9 +991,12 @@ async function computeVmafScore(config, distortedPath, referencePath, options = 
   const model = vmafConfig.model || 'version=vmaf_v0.6.1';
   const nThreads = vmafConfig.n_threads || 8;
   const nSubsample = vmafConfig.n_subsample || 12;
+  const fps = vmafConfig.fps;
+
+  const fpsFilter = Number.isFinite(fps) && fps > 0 ? `,fps=${fps}` : '';
 
   const filterGraph =
-    `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model=${model}:log_path=${reportPath}:log_fmt=json:n_threads=${nThreads}:n_subsample=${nSubsample}`;
+    `[0:v]setpts=PTS-STARTPTS${fpsFilter}[dist];[1:v]setpts=PTS-STARTPTS${fpsFilter}[ref];[dist][ref]libvmaf=model=${model}:log_path=${reportPath}:log_fmt=json:n_threads=${nThreads}:n_subsample=${nSubsample}`;
 
   const args = [
     '-i',
