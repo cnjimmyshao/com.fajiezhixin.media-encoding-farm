@@ -74,6 +74,9 @@ block content
         input(type="checkbox", id="perScene", name="perScene")
         span 启用按场景切片编码（生成场景片段并合并输出）
       p(class="field-hint") 开启后将先用 FFmpeg 场景检测切片，每个片段独立调节码率以满足目标 VMAF，再合并生成最终文件及 HLS/DASH。
+      label(for="sceneThresh") 场景检测阈值（0-1，建议 0.4）
+      input(type="number", id="sceneThresh", name="sceneThresh", step="0.01", min="0.01", max="1", value="0.4", disabled)
+      p(class="field-hint") 越大表示场景切换更敏感；仅在开启按场景编码时生效。
 
     fieldset
       legend 可选分析
@@ -102,6 +105,7 @@ block content
     const vmafMinInput = document.getElementById('vmafMin');
     const vmafMaxInput = document.getElementById('vmafMax');
     const perSceneInput = document.getElementById('perScene');
+    const sceneThreshInput = document.getElementById('sceneThresh');
     let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
@@ -311,6 +315,19 @@ block content
       updateEncoderOptions(initialCodecInput.value);
     }
 
+    function isPerSceneEnabled() {
+      return Boolean(perSceneInput?.checked);
+    }
+
+    function updateSceneThresholdUI() {
+      if (!sceneThreshInput) {
+        return;
+      }
+      const enabled = isPerSceneEnabled();
+      sceneThreshInput.disabled = !enabled;
+      sceneThreshInput.required = enabled;
+    }
+
     function updateQualityModeUI(mode) {
       currentQualityMode = mode;
       if (mode === 'bitrate') {
@@ -326,7 +343,7 @@ block content
         bitrateInput.required = mode === 'bitrate';
         bitrateInput.disabled = mode !== 'bitrate';
       }
-      const shouldEnableVmaf = mode === 'bitrate' || perSceneInput?.checked;
+      const shouldEnableVmaf = mode === 'bitrate' || isPerSceneEnabled();
       [vmafMinInput, vmafMaxInput].forEach((input) => {
         if (input) {
           input.disabled = !shouldEnableVmaf;
@@ -341,10 +358,12 @@ block content
 
     if (perSceneInput) {
       perSceneInput.addEventListener('change', () => {
+        updateSceneThresholdUI();
         updateQualityModeUI(currentQualityMode);
       });
     }
 
+    updateSceneThresholdUI();
     updateQualityModeUI('crf');
 
     form.addEventListener('submit', async (event) => {
@@ -380,6 +399,13 @@ block content
       }
       const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf || 'bitrate'}`;
       const perScene = perSceneInput?.checked ?? false;
+      const sceneThreshold = parseFloat(formData.get('sceneThresh'));
+      if (perScene) {
+        if (!Number.isFinite(sceneThreshold) || sceneThreshold <= 0 || sceneThreshold > 1) {
+          message.textContent = '请输入 0-1 之间的场景检测阈值';
+          return;
+        }
+      }
       if (perScene && !hasVmafRange) {
         message.textContent = '场景编码模式需要设置 VMAF 最低值与最高值';
         return;
@@ -401,7 +427,8 @@ block content
           enableVmaf,
           vmafMin: hasVmafRange ? vmafMin : null,
           vmafMax: hasVmafRange ? vmafMax : null,
-          perScene
+          perScene,
+          sceneThreshold: perScene ? sceneThreshold : null
         }
       };
       const res = await fetch('/api/jobs', {
