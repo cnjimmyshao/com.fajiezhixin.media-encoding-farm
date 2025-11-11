@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, basename, extname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { runExternalFfmpeg } from './ffmpeg-utils.mjs';
 
 async function generateHlsOutputs(ffmpegBin, sourcePath) {
   const outputDir = dirname(sourcePath);

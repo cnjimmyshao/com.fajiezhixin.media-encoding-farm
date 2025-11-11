@@ -450,23 +450,34 @@ block content
 
     function updateQualityModeUI(mode) {
       currentQualityMode = mode;
-      if (mode === 'bitrate') {
-        crfFieldset.classList.add('hidden');
+      
+      // 隐藏所有模式相关的fieldset
+      crfFieldset.classList.add('hidden');
+      bitrateFieldset.classList.add('hidden');
+      vmafFieldset.classList.add('hidden');
+      
+      // 显示当前模式对应的fieldset
+      if (mode === 'crf') {
+        crfFieldset.classList.remove('hidden');
+        setCrfGroupRequired(true);
+      } else if (mode === 'bitrate') {
         bitrateFieldset.classList.remove('hidden');
         setCrfGroupRequired(false);
-      } else {
-        crfFieldset.classList.remove('hidden');
-        bitrateFieldset.classList.add('hidden');
-        setCrfGroupRequired(true);
+        if (bitrateInput) {
+          bitrateInput.required = true;
+          bitrateInput.disabled = false;
+        }
+      } else if (mode === 'vmaf') {
+        vmafFieldset.classList.remove('hidden');
+        setCrfGroupRequired(false);
       }
-      if (bitrateInput) {
-        bitrateInput.required = mode === 'bitrate';
-        bitrateInput.disabled = mode !== 'bitrate';
-      }
-      const shouldEnableVmaf = mode === 'bitrate' || isPerSceneEnabled();
+      
+      // VMAF输入框只在VMAF模式下启用
+      const shouldEnableVmaf = mode === 'vmaf';
       [vmafMinInput, vmafMaxInput].forEach((input) => {
         if (input) {
           input.disabled = !shouldEnableVmaf;
+          input.required = shouldEnableVmaf;
         }
       });
     }
@@ -521,7 +532,14 @@ block content
       }
       const vmafMin = parseFloat(formData.get('vmafMin'));
       const vmafMax = parseFloat(formData.get('vmafMax'));
-      const hasVmafRange = Number.isFinite(vmafMin) && Number.isFinite(vmafMax);
+      const isVmafMode = qualityMode === 'vmaf';
+      const hasVmafRange = isVmafMode && Number.isFinite(vmafMin) && Number.isFinite(vmafMax);
+      
+      if (isVmafMode && !hasVmafRange) {
+        message.textContent = 'VMAF 模式必须设置最低值与最高值';
+        return;
+      }
+      
       if (hasVmafRange && vmafMin > vmafMax) {
         message.textContent = 'VMAF 最低值不能大于最高值';
         return;
@@ -553,9 +571,9 @@ block content
           scale,
           qualityMode,
           bitrateKbps: qualityMode === 'bitrate' ? bitrateNumeric : null,
-          enableVmaf,
-          vmafMin: hasVmafRange ? vmafMin : null,
-          vmafMax: hasVmafRange ? vmafMax : null,
+          enableVmaf: isVmafMode || perScene,
+          vmafMin: isVmafMode ? vmafMin : null,
+          vmafMax: isVmafMode ? vmafMax : null,
           perScene,
           sceneThreshold: perScene ? (sceneThreshold || 0.4) : null
         }
@@ -571,9 +589,9 @@ block content
         scale,
         qualityMode,
         bitrateKbps: qualityMode === 'bitrate' && Number.isFinite(bitrateNumeric) ? bitrateNumeric : null,
-        enableVmaf,
-        vmafMin: hasVmafRange ? vmafMin : null,
-        vmafMax: hasVmafRange ? vmafMax : null,
+        enableVmaf: isVmafMode || perScene,
+        vmafMin: isVmafMode ? vmafMin : null,
+        vmafMax: isVmafMode ? vmafMax : null,
         perScene,
         sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null,
         vmafTimeout: Number.isFinite(vmafTimeout) ? vmafTimeout : null

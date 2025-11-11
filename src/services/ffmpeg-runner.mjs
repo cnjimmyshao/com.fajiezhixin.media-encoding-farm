@@ -32,7 +32,7 @@ import {
   buildBitrateOverride,
   decideNextBitrate,
   parseVmafTargets,
-} from "./encoding-params.mjs";
+} from "./ffmpeg/ffmpeg-encoding-params.mjs";
 import {
   probeDuration,
   parseFfmpegTime,
@@ -143,8 +143,7 @@ async function runPerSceneJob(job, durationSec, config) {
     await concatSceneSegments(
       config.ffmpeg.bin,
       segmentFiles,
-      job.output_path,
-      jobLog
+      job.output_path
     );
   } catch (error) {
     await finalizeOnFailure(job.id, {
@@ -159,8 +158,7 @@ async function runPerSceneJob(job, durationSec, config) {
   try {
     hlsInfo = await generateHlsOutputs(
       config.ffmpeg.bin,
-      job.output_path,
-      jobLog
+      job.output_path
     );
   } catch (error) {
     await finalizeOnFailure(job.id, {
@@ -172,8 +170,7 @@ async function runPerSceneJob(job, durationSec, config) {
   try {
     dashInfo = await generateDashOutputs(
       config.ffmpeg.bin,
-      job.output_path,
-      jobLog
+      job.output_path
     );
   } catch (error) {
     await finalizeOnFailure(job.id, {
@@ -225,30 +222,14 @@ async function runPerSceneJob(job, durationSec, config) {
         job.input_path,
         {
           reportPath: finalReportPath,
-          jobLog,
           timeout: job.params?.vmafTimeout ?? null,
         }
       );
       finalMetrics.vmafScore = Number(finalVmafStats.mean.toFixed(3));
       finalMetrics.vmafMax = Number(finalVmafStats.max.toFixed(3));
       finalMetrics.vmafMin = Number(finalVmafStats.min.toFixed(3));
-      logVmafResult(jobLog, {
-        targetPath: job.output_path,
-        referencePath: job.input_path,
-        reportPath: finalReportPath,
-        mean: finalMetrics.vmafScore,
-        max: finalMetrics.vmafMax,
-        min: finalMetrics.vmafMin,
-        context: buildVmafContext(null, "final-output"),
-      });
     } catch (error) {
       finalMetrics.vmafError = error.message;
-      logVmafResult(jobLog, {
-        targetPath: job.output_path,
-        referencePath: job.input_path,
-        context: buildVmafContext(null, "final-output"),
-        error: error.message,
-      });
     }
   }
 
@@ -362,4 +343,4 @@ async function runJob(job, durationSec, config) {
   });
 }
 
-export { runJob, runPerSceneJob, cancelRunningJob };
+export { runJob, runPerSceneJob, cancelRunningJob, probeDuration };

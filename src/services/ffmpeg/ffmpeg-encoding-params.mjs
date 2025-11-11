@@ -3,7 +3,7 @@
  * @description 编码参数构建、码率控制
  */
 
-import { audioArgs, buildVideoArgs, videoPresets, getResolutionPreset } from './presets.mjs';
+import { audioArgs, buildVideoArgs, videoPresets, getResolutionPreset } from '../presets.mjs';
 import { getCodecExtraArgs, getAudioArgs as getCodecAudioArgs } from './codec-config.mjs';
 
 function buildFfmpegArgs(

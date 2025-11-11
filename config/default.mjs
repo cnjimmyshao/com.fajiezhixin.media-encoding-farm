@@ -6,6 +6,9 @@ export const defaultConfig = {
   server: {
     port: 3000,
   },
+  scheduler: {
+    loopInterval: 1000,
+  },
   paths: {
     workspace: "/tmp/vef",
   },

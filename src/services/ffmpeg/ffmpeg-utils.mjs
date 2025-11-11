@@ -215,8 +215,10 @@ async function runFfmpegProcess(
   }
 
   let lastProgress = 0;
+  let stderrBuffer = "";
   const rl = createInterface({ input: child.stderr });
   rl.on("line", (line) => {
+    stderrBuffer += line + "\n";
     const timeMatch = /time=([0-9:.]+)/.exec(line);
     if (timeMatch && (durationSec || progressTracker?.duration)) {
       const seconds = parseFfmpegTime(timeMatch[1]);
@@ -261,10 +263,11 @@ async function runFfmpegProcess(
     };
   }
   if (code !== 0) {
+    const errorDetail = stderrBuffer.trim() || `ffmpeg 退出码 ${code}`;
     return {
       success: false,
       status: "failed",
-      error: `ffmpeg 退出码 ${code}`,
+      error: errorDetail,
       progress: lastProgress,
     };
   }

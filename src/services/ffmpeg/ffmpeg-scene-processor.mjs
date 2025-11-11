@@ -12,7 +12,7 @@ import {
   decideNextBitrate,
 } from "./ffmpeg-encoding-params.mjs";
 import { computeVmafScore, isVmafWithin } from "./ffmpeg-vmaf-calculator.mjs";
-import { transcodeOnce } from "./ffmpeg-utils.mjs";
+import { transcodeOnce, runExternalFfmpeg } from "./ffmpeg-utils.mjs";
 
 async function detectSceneCuts(ffmpegBin, inputPath, threshold) {
   return new Promise((resolve) => {

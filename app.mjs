@@ -11,7 +11,7 @@ import defaultConfig from "./config/default.mjs";
 import apiRoutes from "./src/routes/api.mjs";
 import webRoutes from "./src/routes/web.mjs";
 import { startScheduler } from "./src/scheduler.mjs";
-import { detectEncoderSupport } from "./src/services/hardware-capabilities.mjs";
+import { detectEncoderSupport, detectCudaSupport } from "./src/services/hardware-capabilities.mjs";
 import logger from "./src/services/logger.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
