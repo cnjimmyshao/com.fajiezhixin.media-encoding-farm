@@ -1,0 +1,85 @@
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[ERROR] 请求处理异常 Error: CHECK constraint failed: impl IN ('svt-av1','x265','x264')
+    at Database.run (file:///root/dev/com.fajiezhixin.media-encoding-farm/src/db/sql.mjs:24:25)
+    at createJob (file:///root/dev/com.fajiezhixin.media-encoding-farm/src/controllers/jobs.mjs:58:12)
+    at file:///root/dev/com.fajiezhixin.media-encoding-farm/src/routes/api.mjs:37:23
+    at Layer.handleRequest (/root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/lib/layer.js:152:17)
+    at next (/root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/lib/route.js:157:13)
+    at Route.dispatch (/root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/lib/route.js:117:3)
+    at handle (/root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/index.js:435:11)
+    at Layer.handleRequest (/root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/lib/layer.js:152:17)
+    at /root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/index.js:295:15
+    at processParams (/root/dev/com.fajiezhixin.media-encoding-farm/node_modules/.pnpm/router@2.2.0/node_modules/router/index.js:582:12) {
+  code: 'ERR_SQLITE_ERROR',
+  errcode: 275,
+  errstr: 'constraint failed'
+}
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 开始处理任务 #cb5baaa0-501e-495f-8f1b-5aa36075cf76
+[INFO] 开始处理任务 #22343913-b263-4aa6-9f3a-32cea099b688
+[INFO] 开始处理任务 #499f8d07-3174-491b-8a78-4d73e6cce75e
+[INFO] 开始处理任务 #888e220c-86be-4131-af40-b935a2b2e143
+[INFO] 服务器已启动：http://localhost:3000
+[INFO] 任务调度器已启动
+[INFO] 开始处理任务 #43eaadca-8ffc-425d-9efd-ba41ec549d1a
+[INFO] 开始处理任务 #00152845-1ae9-4761-9581-bb999c16c5f4

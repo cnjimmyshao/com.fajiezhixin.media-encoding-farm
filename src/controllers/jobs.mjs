@@ -108,7 +108,8 @@ export async function getJobById(id) {
  * @returns {Promise<object>} 更新后的任务
  */
 export async function updateJob(id, fields) {
-  const keys = Object.keys(fields);
+  const allowedFields = ['status', 'progress', 'error_msg', 'metrics_json'];
+  const keys = Object.keys(fields).filter(key => allowedFields.includes(key));
   if (!keys.length) {
     return getJobById(id);
   }

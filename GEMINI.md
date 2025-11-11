@@ -81,3 +81,9 @@ The server will start on `http://localhost:3000` by default.
 ---
 
 **重要提示：** 从现在开始，所有对话将使用中文进行。
+
+---
+
+## Command Execution Rules
+
+- 禁止运行 pnpm, node, pm2 命令

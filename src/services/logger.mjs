@@ -3,7 +3,23 @@
  * @description 提供一个简单的、基于环境的日志记录器
  */
 
+import { createWriteStream } from 'node:fs';
+import { format } from 'node:util';
+
 const isDev = process.env.NODE_ENV === 'development';
+const logStream = createWriteStream('vef-app.txt', { flags: 'a' });
+
+function writeLog(level, message, ...args) {
+  const formattedMessage = format(`[${level}] ${message}`, ...args);
+  logStream.write(`${formattedMessage}\n`);
+  if (level === 'ERROR') {
+    console.error(formattedMessage);
+  } else if (level === 'WARN') {
+    console.warn(formattedMessage);
+  } else {
+    console.log(formattedMessage);
+  }
+}
 
 const logger = {
   /**
@@ -11,7 +27,7 @@ const logger = {
    * @param  {...any} args 额外参数
    */
   info(message, ...args) {
-    console.log(`[INFO] ${message}`, ...args);
+    writeLog('INFO', message, ...args);
   },
 
   /**
@@ -19,7 +35,7 @@ const logger = {
    * @param  {...any} args 额外参数
    */
   warn(message, ...args) {
-    console.warn(`[WARN] ${message}`, ...args);
+    writeLog('WARN', message, ...args);
   },
 
   /**
@@ -27,7 +43,7 @@ const logger = {
    * @param  {...any} args 额外参数
    */
   error(message, ...args) {
-    console.error(`[ERROR] ${message}`, ...args);
+    writeLog('ERROR', message, ...args);
   },
 
   /**
@@ -36,7 +52,7 @@ const logger = {
    */
   debug(message, ...args) {
     if (isDev) {
-      console.debug(`[DEBUG] ${message}`, ...args);
+      writeLog('DEBUG', message, ...args);
     }
   }
 };

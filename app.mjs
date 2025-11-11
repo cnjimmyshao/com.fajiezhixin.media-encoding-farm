@@ -27,12 +27,6 @@ function buildConfig() {
   if (process.env.WORKSPACE_PATH) config.paths.workspace = process.env.WORKSPACE_PATH;
   if (process.env.FFMPEG_BIN) config.ffmpeg.bin = process.env.FFMPEG_BIN;
   if (process.env.FFPROBE_BIN) config.ffmpeg.ffprobe = process.env.FFPROBE_BIN;
-  if (process.env.FFMPEG_TIMEOUT_FACTOR) {
-    config.ffmpeg.timeoutFactor = Number(process.env.FFMPEG_TIMEOUT_FACTOR);
-  }
-  if (process.env.VMAF_TIMEOUT_SEC) {
-    config.ffmpeg.vmaf.timeoutSec = Number(process.env.VMAF_TIMEOUT_SEC);
-  }
   if (process.env.VMAF_MODEL) {
     config.ffmpeg.vmaf.model = process.env.VMAF_MODEL;
   }

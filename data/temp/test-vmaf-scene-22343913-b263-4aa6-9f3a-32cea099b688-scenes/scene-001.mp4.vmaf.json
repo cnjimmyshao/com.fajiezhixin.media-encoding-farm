@@ -1,0 +1,115 @@
+{
+  "version": "2.3.0",
+  "frames": [
+    {
+      "frameNum": 0,
+      "metrics": {
+        "integer_motion2": 0.000000,
+        "integer_motion": 0.000000,
+        "integer_adm2": 0.967116,
+        "integer_adm_scale0": 0.977128,
+        "integer_adm_scale1": 0.953239,
+        "integer_adm_scale2": 0.960055,
+        "integer_adm_scale3": 0.973867,
+        "integer_vif_scale0": 0.733841,
+        "integer_vif_scale1": 0.906675,
+        "integer_vif_scale2": 0.942235,
+        "integer_vif_scale3": 0.961062,
+        "vmaf": 84.440473
+      }
+    },
+    {
+      "frameNum": 12,
+      "metrics": {
+        "integer_motion2": 16.510288,
+        "integer_motion": 21.726521,
+        "integer_adm2": 0.974040,
+        "integer_adm_scale0": 0.971260,
+        "integer_adm_scale1": 0.959118,
+        "integer_adm_scale2": 0.968295,
+        "integer_adm_scale3": 0.983241,
+        "integer_vif_scale0": 0.697360,
+        "integer_vif_scale1": 0.931402,
+        "integer_vif_scale2": 0.964240,
+        "integer_vif_scale3": 0.979507,
+        "vmaf": 100.000000
+      }
+    }
+  ],
+  "pooled_metrics": {
+    "integer_motion2": {
+      "min": 0.000000,
+      "max": 0.000000,
+      "mean": 0.000000,
+      "harmonic_mean": 0.000000
+    },
+    "integer_motion": {
+      "min": 0.000000,
+      "max": 0.000000,
+      "mean": 0.000000,
+      "harmonic_mean": 0.000000
+    },
+    "integer_adm2": {
+      "min": 0.967116,
+      "max": 0.967116,
+      "mean": 0.967116,
+      "harmonic_mean": 0.967116
+    },
+    "integer_adm_scale0": {
+      "min": 0.977128,
+      "max": 0.977128,
+      "mean": 0.977128,
+      "harmonic_mean": 0.977128
+    },
+    "integer_adm_scale1": {
+      "min": 0.953239,
+      "max": 0.953239,
+      "mean": 0.953239,
+      "harmonic_mean": 0.953239
+    },
+    "integer_adm_scale2": {
+      "min": 0.960055,
+      "max": 0.960055,
+      "mean": 0.960055,
+      "harmonic_mean": 0.960055
+    },
+    "integer_adm_scale3": {
+      "min": 0.973867,
+      "max": 0.973867,
+      "mean": 0.973867,
+      "harmonic_mean": 0.973867
+    },
+    "integer_vif_scale0": {
+      "min": 0.733841,
+      "max": 0.733841,
+      "mean": 0.733841,
+      "harmonic_mean": 0.733841
+    },
+    "integer_vif_scale1": {
+      "min": 0.906675,
+      "max": 0.906675,
+      "mean": 0.906675,
+      "harmonic_mean": 0.906675
+    },
+    "integer_vif_scale2": {
+      "min": 0.942235,
+      "max": 0.942235,
+      "mean": 0.942235,
+      "harmonic_mean": 0.942235
+    },
+    "integer_vif_scale3": {
+      "min": 0.961062,
+      "max": 0.961062,
+      "mean": 0.961062,
+      "harmonic_mean": 0.961062
+    },
+    "vmaf": {
+      "min": 84.440473,
+      "max": 84.440473,
+      "mean": 84.440473,
+      "harmonic_mean": 84.440473
+    }
+  },
+  "aggregate_metrics": {
+  }
+}

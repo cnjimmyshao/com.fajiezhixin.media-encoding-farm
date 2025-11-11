@@ -12,9 +12,7 @@ export const defaultConfig = {
   ffmpeg: {
     bin: 'ffmpeg',
     ffprobe: 'ffprobe',
-    timeoutFactor: 50,
     vmaf: {
-      timeoutSec: 600,
       model: 'version=vmaf_v0.6.1',
       n_threads: 8,
       n_subsample: 12,
