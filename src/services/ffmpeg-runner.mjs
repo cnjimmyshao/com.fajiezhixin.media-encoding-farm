@@ -318,13 +318,12 @@ async function runPerSceneJob(job, durationSec, config, jobLog) {
     try {
       const finalReportPath = `${job.output_path}.vmaf.json`;
       const finalVmafStats = await computeVmafScore(
-        config.ffmpeg.bin,
+        config,
         job.output_path,
         job.input_path,
         {
           reportPath: finalReportPath,
           jobLog,
-          timeout: job.params?.vmafTimeout ?? null
         }
       );
       finalMetrics.vmafScore = Number(finalVmafStats.mean.toFixed(3));
@@ -554,17 +553,6 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
       resolve({ success: false, status: 'failed', error: `ffmpeg 进程启动失败: ${err.message}` });
     });
 
-    const timeoutDuration = durationSec ?? 0;
-    const maxTimeoutMs = timeoutDuration
-      ? Math.max(durationSec * config.ffmpeg.timeoutFactor * 1000, 30000)
-      : 0;
-    let timeoutTimer;
-    if (maxTimeoutMs > 0) {
-      timeoutTimer = setTimeout(() => {
-        child.kill('SIGKILL');
-      }, maxTimeoutMs);
-    }
-
     let lastProgress = 0;
     let stderrBuffer = '';
     child.stderr.on('data', (chunk) => {
@@ -597,9 +585,6 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
     const [code, signal] = await once(child, 'close');
     runningChildren.delete(job.id);
     rl.close();
-    if (timeoutTimer) {
-      clearTimeout(timeoutTimer);
-    }
 
     const stderrText = stderrBuffer.trim();
 
@@ -609,7 +594,7 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
     if (signal === 'SIGKILL') {
       logCommandError(jobLog, {
         command,
-        message: '任务执行超时并被终止',
+        message: '任务执行被终止',
         signal,
         stderr: stderrText || null,
         context: 'transcode'
@@ -617,7 +602,7 @@ async function runFfmpegProcess(job, durationSec, config, ffmpegArgs, progressTr
       return resolve({
         success: false,
         status: 'failed',
-        error: '任务执行超时并被终止',
+        error: '任务执行被终止',
         progress: lastProgress
       });
     }
@@ -668,7 +653,6 @@ async function collectMetrics(
         {
           reportPath,
           jobLog,
-          timeout: job.params?.vmafTimeout ?? null
         }
       );
       metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
@@ -982,56 +966,79 @@ export function cancelRunningJob(jobId) {
 }
 
 async function computeVmafScore(config, distortedPath, referencePath, options = {}) {
-  const { reportPath = null, jobLog = null, timeout: timeoutSecondsOverride = null } = options;
+
+  const { reportPath = null, jobLog = null } = options;
+
   if (!reportPath) {
+
     return Promise.reject(new Error('VMAF 报告路径未提供'));
+
   }
 
+
+
   const vmafConfig = config.ffmpeg?.vmaf ?? {};
+
   const model = vmafConfig.model || 'version=vmaf_v0.6.1';
+
   const nThreads = vmafConfig.n_threads || 8;
+
   const nSubsample = vmafConfig.n_subsample || 12;
+
   const fps = vmafConfig.fps;
+
+
 
   const fpsFilter = Number.isFinite(fps) && fps > 0 ? `,fps=${fps}` : '';
 
+
+
   const filterGraph =
+
     `[0:v]setpts=PTS-STARTPTS${fpsFilter}[dist];[1:v]setpts=PTS-STARTPTS${fpsFilter}[ref];[dist][ref]libvmaf=model=${model}:log_path=${reportPath}:log_fmt=json:n_threads=${nThreads}:n_subsample=${nSubsample}`;
 
+
+
   const args = [
+
     '-i',
+
     distortedPath,
+
     '-i',
+
     referencePath,
+
     '-lavfi',
+
     filterGraph,
+
     '-f',
+
     'null',
+
     '-'
+
   ];
+
   const command = pushCommand(jobLog, config.ffmpeg.bin, args);
 
+
+
   return new Promise(async (resolve, reject) => {
+
     const child = spawn(config.ffmpeg.bin, args, {
+
       stdio: ['ignore', 'ignore', 'pipe']
+
     });
 
-    const timeoutPromise = new Promise((_, rejectTimeout) => {
-      const timeoutSeconds = timeoutSecondsOverride ?? vmafConfig.timeoutSec ?? 300;
-      if (timeoutSeconds <= 0) {
-        return; // A timeout of 0 or less disables it
-      }
-      const timer = setTimeout(() => {
-        if (!child.killed) {
-          child.kill('SIGKILL');
-        }
-        rejectTimeout(new Error('VMAF 计算超时'));
-      }, timeoutSeconds * 1000);
-      child.on('close', () => clearTimeout(timer));
-    });
+
 
     const executionPromise = new Promise(async (resolveExecution) => {
+
       child.on('error', (err) => {
+
         logCommandError(jobLog, {
 
           command,
@@ -1057,6 +1064,8 @@ async function computeVmafScore(config, distortedPath, referencePath, options = 
         stderr += chunk.toString();
 
       });
+
+
 
       const [code] = await once(child, 'close');
 
@@ -1218,7 +1227,7 @@ async function computeVmafScore(config, distortedPath, referencePath, options = 
 
 
 
-    Promise.race([executionPromise, timeoutPromise])
+    executionPromise
 
       .then(resolve)
 
