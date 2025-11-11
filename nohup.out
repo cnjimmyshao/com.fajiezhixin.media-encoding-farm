@@ -1,4 +1,0 @@
-
-> encoding-farm@0.1.0 start /root/dev/com.fajiezhixin.media-encoding-farm
-> node --env-file .env --experimental-sqlite scripts/boot-app.mjs
-

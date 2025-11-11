@@ -144,6 +144,6 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 # media-encoding-farm workspace
-data/media
-data/temp
-data/output
+data/
+
+
