@@ -16,8 +16,9 @@ import {
   hasRunningJob,
   updateJob
 } from './src/controllers/jobs.mjs';
-import { probeDuration, runJob } from './src/services/ffmpeg-runner.mjs';
-import { detectEncoderSupport } from './src/services/hardware-capabilities.mjs';
+import { runJob } from './src/services/ffmpeg-runner.mjs';
+import { probeDuration } from './src/services/ffmpeg-utils.mjs';
+import { detectEncoderSupport, detectCudaSupport } from './src/services/hardware-capabilities.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,6 +42,25 @@ function buildConfig() {
 const config = buildConfig();
 await mkdir(config.paths.workspace, { recursive: true });
 const encoderSupport = await detectEncoderSupport(config.ffmpeg.bin);
+
+// 检测CUDA支持
+const cudaInfo = await detectCudaSupport(config.ffmpeg.bin);
+if (cudaInfo.enabled) {
+  config.cuda = {
+    ...config.cuda,
+    enabled: true,
+    hasCudaSupport: true,
+    device: 0,
+    gpuInfo: cudaInfo.gpuInfo
+  };
+  console.log(`检测到CUDA支持: ${cudaInfo.gpuInfo || 'NVIDIA GPU'}`);
+} else {
+  config.cuda = {
+    ...config.cuda,
+    enabled: false,
+    hasCudaSupport: false
+  };
+}
 
 const app = express();
 app.set('views', join(__dirname, 'views'));

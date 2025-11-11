@@ -1,10 +1,11 @@
 /**
  * @file 硬件能力检测
- * @description 通过 ffmpeg -encoders 输出检测可用的硬件编码器
+ * @description 检测硬件编码器和CUDA支持
  */
 import { spawn } from 'node:child_process';
 
 let cachedEncoders = null;
+let cachedCudaInfo = null;
 
 async function readEncoders(ffmpegBin) {
   return new Promise((resolve, reject) => {
@@ -30,6 +31,102 @@ async function readEncoders(ffmpegBin) {
       resolve(stdout);
     });
   });
+}
+
+/**
+ * @description 检测CUDA支持
+ * @param {string} ffmpegBin ffmpeg可执行文件路径
+ * @returns {Promise<Object>} CUDA支持信息
+ */
+async function detectCudaSupportInternal(ffmpegBin) {
+  if (cachedCudaInfo) {
+    return cachedCudaInfo;
+  }
+  
+  const cudaInfo = {
+    hasNvidiaGpu: false,
+    hasCudaSupport: false,
+    hasLibvmafCuda: false,
+    gpuInfo: null,
+    deviceId: 0,
+    enabled: false
+  };
+  
+  try {
+    // 检测nvidia-smi
+    const nvidiaSmi = spawn('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    let gpuInfo = '';
+    nvidiaSmi.stdout.on('data', (chunk) => {
+      gpuInfo += chunk.toString();
+    });
+    
+    nvidiaSmi.on('error', () => {
+      // 进程启动失败，nvidia-smi不存在
+    });
+    
+    const [code] = await once(nvidiaSmi, 'close');
+    
+    if (code === 0 && gpuInfo.trim()) {
+      cudaInfo.hasNvidiaGpu = true;
+      cudaInfo.gpuInfo = gpuInfo.trim();
+    }
+  } catch (error) {
+    // nvidia-smi不存在，不是NVIDIA系统
+  }
+  
+  try {
+    // 检测ffmpeg的CUDA支持
+    const ffmpeg = spawn(ffmpegBin, ['-hide_banner', '-hwaccels'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    let hwAccels = '';
+    ffmpeg.stdout.on('data', (chunk) => {
+      hwAccels += chunk.toString();
+    });
+    
+    ffmpeg.on('error', () => {
+      // ffmpeg命令失败
+    });
+    
+    const [code] = await once(ffmpeg, 'close');
+    
+    if (code === 0 && hwAccels.includes('cuda')) {
+      cudaInfo.hasCudaSupport = true;
+    }
+  } catch (error) {
+    // ffmpeg命令失败
+  }
+  
+  try {
+    // 检测libvmaf
+    const ffmpegFilters = spawn(ffmpegBin, ['-hide_banner', '-filters'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    let filters = '';
+    ffmpegFilters.stdout.on('data', (chunk) => {
+      filters += chunk.toString();
+    });
+    
+    const [code] = await once(ffmpegFilters, 'close');
+    
+    if (code === 0 && filters.includes('libvmaf')) {
+      // 如果系统有CUDA且ffmpeg支持CUDA，则启用CUDA加速
+      if (cudaInfo.hasNvidiaGpu && cudaInfo.hasCudaSupport) {
+        cudaInfo.hasLibvmafCuda = true;
+        cudaInfo.enabled = true;
+      }
+    }
+  } catch (error) {
+    // ffmpeg命令失败
+  }
+  
+  cachedCudaInfo = cudaInfo;
+  return cudaInfo;
 }
 
 /**
@@ -59,4 +156,13 @@ export async function detectEncoderSupport(ffmpegBin) {
   }
 }
 
-export default detectEncoderSupport;
+/**
+ * @description 检测CUDA支持
+ * @param {string} ffmpegBin ffmpeg可执行文件路径
+ * @returns {Promise<Object>} CUDA支持信息
+ */
+export async function detectCudaSupport(ffmpegBin) {
+  return detectCudaSupportInternal(ffmpegBin);
+}
+
+export default { detectEncoderSupport, detectCudaSupport };

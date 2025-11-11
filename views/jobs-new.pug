@@ -73,6 +73,13 @@ block content
       label(class="checkbox-option")
         input(type="checkbox", id="perScene", name="perScene")
         span 启用按场景切片编码（生成场景片段并合并输出）
+      
+      div(id="sceneThresholdGroup", class="hidden")
+        label(for="sceneThreshold") 场景检测灵敏度
+        input(type="number", id="sceneThreshold", name="sceneThreshold", 
+              min="0.01", max="1", step="0.01", value="0.4")
+        p(class="field-hint") 值越小检测越敏感（0.01-1.0），默认 0.4。快速剪辑视频建议 0.2-0.3，慢节奏内容建议 0.5-0.6。
+      
       p(class="field-hint") 开启后将先用 FFmpeg 场景检测切片，每个片段独立调节码率以满足目标 VMAF，再合并生成最终文件及 HLS/DASH。
 
     fieldset
@@ -102,6 +109,8 @@ block content
     const vmafMinInput = document.getElementById('vmafMin');
     const vmafMaxInput = document.getElementById('vmafMax');
     const perSceneInput = document.getElementById('perScene');
+    const sceneThresholdGroup = document.getElementById('sceneThresholdGroup');
+    const sceneThresholdInput = document.getElementById('sceneThreshold');
     let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
@@ -342,6 +351,14 @@ block content
     if (perSceneInput) {
       perSceneInput.addEventListener('change', () => {
         updateQualityModeUI(currentQualityMode);
+        // 显示或隐藏 sceneThreshold 输入框
+        if (sceneThresholdGroup && sceneThresholdInput) {
+          if (perSceneInput.checked) {
+            sceneThresholdGroup.classList.remove('hidden');
+          } else {
+            sceneThresholdGroup.classList.add('hidden');
+          }
+        }
       });
     }
 
@@ -380,8 +397,13 @@ block content
       }
       const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf || 'bitrate'}`;
       const perScene = perSceneInput?.checked ?? false;
+      const sceneThreshold = perScene && sceneThresholdInput ? parseFloat(formData.get('sceneThreshold')) : null;
       if (perScene && !hasVmafRange) {
         message.textContent = '场景编码模式需要设置 VMAF 最低值与最高值';
+        return;
+      }
+      if (perScene && sceneThreshold !== null && (sceneThreshold < 0.01 || sceneThreshold > 1)) {
+        message.textContent = '场景检测灵敏度必须在 0.01-1.0 范围内';
         return;
       }
       const enableVmaf = formData.get('enableVmaf') === 'on' || hasVmafRange || perScene;
@@ -401,7 +423,8 @@ block content
           enableVmaf,
           vmafMin: hasVmafRange ? vmafMin : null,
           vmafMax: hasVmafRange ? vmafMax : null,
-          perScene
+          perScene,
+          sceneThreshold: perScene ? (sceneThreshold || 0.4) : null
         }
       };
       const res = await fetch('/api/jobs', {
