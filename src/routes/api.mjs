@@ -130,9 +130,26 @@ function normalizeJobParams(rawParams = {}) {
     delete params.vmafMax;
   }
   const hasVmafRange = Number.isFinite(params.vmafMin) && Number.isFinite(params.vmafMax);
-  if (params.perScene && !hasVmafRange) {
-    return { error: '场景编码需要设置有效的 VMAF 范围' };
+  if (params.perScene) {
+    if (!hasVmafRange) {
+      return { error: '场景编码需要设置有效的 VMAF 范围' };
+    }
+    const sceneThreshold = Number(params.sceneThreshold);
+    if (!Number.isFinite(sceneThreshold) || sceneThreshold <= 0 || sceneThreshold > 1) {
+      return { error: '场景编码需要 0-1 之间的阈值（sceneThreshold）' };
+    }
+    params.sceneThreshold = sceneThreshold;
+  } else {
+    delete params.sceneThreshold;
   }
   params.enableVmaf = Boolean(params.enableVmaf);
+
+  const vmafTimeout = Number(params.vmafTimeout);
+  if (Number.isFinite(vmafTimeout) && vmafTimeout > 0) {
+    params.vmafTimeout = Math.round(vmafTimeout);
+  } else {
+    delete params.vmafTimeout;
+  }
+
   return params;
 }

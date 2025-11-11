@@ -16,6 +16,8 @@ mkdirSync(dirname(dbPath), { recursive: true });
 class Database {
   constructor(filename) {
     this.instance = new DatabaseSync(filename);
+    this.instance.exec('PRAGMA journal_mode = WAL;');
+    this.instance.exec('PRAGMA busy_timeout = 3000;');
   }
 
   async run(sql, ...params) {

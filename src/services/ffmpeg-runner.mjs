@@ -140,7 +140,12 @@ async function runPerSceneJob(job, durationSec, config) {
 
   const segmentFiles = sceneMetrics.map((item) => item.output);
   try {
-    await concatSceneSegments(config.ffmpeg.bin, segmentFiles, job.output_path);
+    await concatSceneSegments(
+      config.ffmpeg.bin,
+      segmentFiles,
+      job.output_path,
+      jobLog
+    );
   } catch (error) {
     await finalizeOnFailure(job.id, {
       status: "failed",
@@ -152,7 +157,11 @@ async function runPerSceneJob(job, durationSec, config) {
   let hlsInfo = null;
   let dashInfo = null;
   try {
-    hlsInfo = await generateHlsOutputs(config.ffmpeg.bin, job.output_path);
+    hlsInfo = await generateHlsOutputs(
+      config.ffmpeg.bin,
+      job.output_path,
+      jobLog
+    );
   } catch (error) {
     await finalizeOnFailure(job.id, {
       status: "failed",
@@ -161,7 +170,11 @@ async function runPerSceneJob(job, durationSec, config) {
     return;
   }
   try {
-    dashInfo = await generateDashOutputs(config.ffmpeg.bin, job.output_path);
+    dashInfo = await generateDashOutputs(
+      config.ffmpeg.bin,
+      job.output_path,
+      jobLog
+    );
   } catch (error) {
     await finalizeOnFailure(job.id, {
       status: "failed",
@@ -200,7 +213,43 @@ async function runPerSceneJob(job, durationSec, config) {
 
   const aggregatedVmaf = aggregateVmaf(sceneMetrics);
   if (aggregatedVmaf) {
-    Object.assign(finalMetrics, aggregatedVmaf);
+    finalMetrics.sceneVmafAggregate = aggregatedVmaf;
+  }
+
+  if (job.params?.enableVmaf || vmafTargets) {
+    try {
+      const finalReportPath = `${job.output_path}.vmaf.json`;
+      const finalVmafStats = await computeVmafScore(
+        config.ffmpeg.bin,
+        job.output_path,
+        job.input_path,
+        {
+          reportPath: finalReportPath,
+          jobLog,
+          timeout: job.params?.vmafTimeout ?? null,
+        }
+      );
+      finalMetrics.vmafScore = Number(finalVmafStats.mean.toFixed(3));
+      finalMetrics.vmafMax = Number(finalVmafStats.max.toFixed(3));
+      finalMetrics.vmafMin = Number(finalVmafStats.min.toFixed(3));
+      logVmafResult(jobLog, {
+        targetPath: job.output_path,
+        referencePath: job.input_path,
+        reportPath: finalReportPath,
+        mean: finalMetrics.vmafScore,
+        max: finalMetrics.vmafMax,
+        min: finalMetrics.vmafMin,
+        context: buildVmafContext(null, "final-output"),
+      });
+    } catch (error) {
+      finalMetrics.vmafError = error.message;
+      logVmafResult(jobLog, {
+        targetPath: job.output_path,
+        referencePath: job.input_path,
+        context: buildVmafContext(null, "final-output"),
+        error: error.message,
+      });
+    }
   }
 
   await updateJob(job.id, {

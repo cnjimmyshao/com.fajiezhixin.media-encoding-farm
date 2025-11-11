@@ -81,6 +81,9 @@ block content
         p(class="field-hint") 值越小检测越敏感（0.01-1.0），默认 0.4。快速剪辑视频建议 0.2-0.3，慢节奏内容建议 0.5-0.6。
       
       p(class="field-hint") 开启后将先用 FFmpeg 场景检测切片，每个片段独立调节码率以满足目标 VMAF，再合并生成最终文件及 HLS/DASH。
+      label(for="sceneThresh") 场景检测阈值（0-1，建议 0.4）
+      input(type="number", id="sceneThresh", name="sceneThresh", step="0.01", min="0.01", max="1", value="0.4", disabled)
+      p(class="field-hint") 越大表示场景切换更敏感；仅在开启按场景编码时生效。
 
     fieldset
       legend 可选分析
@@ -88,6 +91,9 @@ block content
         input(type="checkbox", id="enableVmaf", name="enableVmaf")
         span 启用 VMAF 质量评估
       p(class="field-hint") 选择后将在任务完成后运行 VMAF 评估，可能增加额外耗时。
+      label(for="vmafTimeout") VMAF 超时时间（秒）
+      input(type="number", id="vmafTimeout", name="vmafTimeout", min="1", step="1", placeholder="例如 300")
+      p(class="field-hint") 为 VMAF 分析设置一个超时时间，防止进程卡死。
 
     button(type="submit") 提交任务
   p#form-message
@@ -111,12 +117,44 @@ block content
     const perSceneInput = document.getElementById('perScene');
     const sceneThresholdGroup = document.getElementById('sceneThresholdGroup');
     const sceneThresholdInput = document.getElementById('sceneThreshold');
+    const sceneThreshInput = document.getElementById('sceneThresh');
+    const enableVmafInput = document.getElementById('enableVmaf');
+    const vmafTimeoutInput = document.getElementById('vmafTimeout');
     let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
       acc[codec.key] = codec;
       return acc;
     }, {});
+    const STORAGE_KEY = 'jobForm.lastInput';
+
+    function loadPersistedState() {
+      if (!('localStorage' in window)) {
+        return null;
+      }
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          return null;
+        }
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch (error) {
+        console.warn('无法读取历史输入', error);
+        return null;
+      }
+    }
+
+    function persistFormState(state) {
+      if (!('localStorage' in window)) {
+        return;
+      }
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (error) {
+        console.warn('无法保存历史输入', error);
+      }
+    }
 
     function fillRadioGroup(container, name, items, placeholder, selectedValue) {
       container.innerHTML = '';
@@ -256,21 +294,91 @@ block content
       return { profileSelection, presetSelection };
     }
 
-    function updateEncoderOptions(codecKey) {
+    function updateEncoderOptions(codecKey, selected = {}) {
       const codec = codecMap[codecKey];
       const encoders = codec ? codec.encoders : [];
       const encoderSelection = fillRadioGroup(
         encoderOptionsContainer,
         'impl',
         encoders,
-        '请选择编码器'
+        '请选择编码器',
+        selected.impl
       );
       if (encoderSelection) {
-        renderEncoderDetails(codecKey, encoderSelection);
+        renderEncoderDetails(codecKey, encoderSelection, {
+          profile: selected.profile,
+          preset: selected.preset,
+          crf: selected.crf
+        });
       } else {
         fillRadioGroup(profileOptionsContainer, 'profile', [], '请选择 Profile');
         fillRadioGroup(presetOptionsContainer, 'preset', [], '请选择编码预设');
         fillRadioGroup(crfOptionsContainer, 'crf', [], '请选择 CRF 值');
+      }
+    }
+
+    function applyPersistedState(state) {
+      if (!state || typeof state !== 'object') {
+        return;
+      }
+      currentQualityMode = state.qualityMode === 'bitrate' ? 'bitrate' : 'crf';
+      if (typeof state.inputPath === 'string') {
+        form.elements.inputPath.value = state.inputPath;
+      }
+      if (typeof state.outputPath === 'string') {
+        form.elements.outputPath.value = state.outputPath;
+      }
+      if (typeof state.perScene === 'boolean' && perSceneInput) {
+        perSceneInput.checked = state.perScene;
+      }
+      if (sceneThreshInput) {
+        if (Number.isFinite(state.sceneThreshold)) {
+          sceneThreshInput.value = state.sceneThreshold;
+        } else {
+          sceneThreshInput.value = sceneThreshInput.defaultValue || '';
+        }
+      }
+      if (qualityModeContainer) {
+        const qualityInput = qualityModeContainer.querySelector(`input[name="qualityMode"][value="${currentQualityMode}"]`);
+        if (qualityInput) {
+          qualityInput.checked = true;
+        }
+      }
+      if (state.codec) {
+        const codecInput = codecOptionsContainer.querySelector(`input[name="codec"][value="${state.codec}"]`);
+        if (codecInput) {
+          codecInput.checked = true;
+        }
+      }
+      let selectedCodec = state.codec;
+      if (!selectedCodec || !codecMap[selectedCodec]) {
+        selectedCodec = form.elements.codec?.value || null;
+      }
+      updateEncoderOptions(selectedCodec, state);
+      if (state.scale) {
+        const scaleInput = form.querySelector(`input[name="scale"][value="${state.scale}"]`);
+        if (scaleInput) {
+          scaleInput.checked = true;
+        }
+      }
+      if (bitrateInput) {
+        if (state.qualityMode === 'bitrate' && Number.isFinite(state.bitrateKbps)) {
+          bitrateInput.value = state.bitrateKbps;
+        } else {
+          bitrateInput.value = '';
+        }
+      }
+      if (enableVmafInput) {
+        enableVmafInput.checked = Boolean(state.enableVmaf);
+      }
+      if (vmafMinInput) {
+        vmafMinInput.value = Number.isFinite(state.vmafMin) ? state.vmafMin : '';
+      }
+      if (vmafMaxInput) {
+        vmafMaxInput.value = Number.isFinite(state.vmafMax) ? state.vmafMax : '';
+      }
+      if (vmafTimeoutInput) {
+        vmafTimeoutInput.value = Number.isFinite(state.vmafTimeout) ? state.vmafTimeout : '';
       }
     }
 
@@ -315,9 +423,29 @@ block content
       });
     });
 
-    const initialCodecInput = codecOptionsContainer.querySelector('input[name="codec"]:checked');
-    if (initialCodecInput) {
-      updateEncoderOptions(initialCodecInput.value);
+    const persistedState = loadPersistedState();
+    if (persistedState) {
+      applyPersistedState(persistedState);
+    } else {
+      const defaultCodecInput = codecOptionsContainer.querySelector('input[name="codec"]:checked');
+      if (defaultCodecInput) {
+        updateEncoderOptions(defaultCodecInput.value);
+      } else {
+        updateEncoderOptions(null);
+      }
+    }
+
+    function isPerSceneEnabled() {
+      return Boolean(perSceneInput?.checked);
+    }
+
+    function updateSceneThresholdUI() {
+      if (!sceneThreshInput) {
+        return;
+      }
+      const enabled = isPerSceneEnabled();
+      sceneThreshInput.disabled = !enabled;
+      sceneThreshInput.required = enabled;
     }
 
     function updateQualityModeUI(mode) {
@@ -335,7 +463,7 @@ block content
         bitrateInput.required = mode === 'bitrate';
         bitrateInput.disabled = mode !== 'bitrate';
       }
-      const shouldEnableVmaf = mode === 'bitrate' || perSceneInput?.checked;
+      const shouldEnableVmaf = mode === 'bitrate' || isPerSceneEnabled();
       [vmafMinInput, vmafMaxInput].forEach((input) => {
         if (input) {
           input.disabled = !shouldEnableVmaf;
@@ -350,6 +478,7 @@ block content
 
     if (perSceneInput) {
       perSceneInput.addEventListener('change', () => {
+        updateSceneThresholdUI();
         updateQualityModeUI(currentQualityMode);
         // 显示或隐藏 sceneThreshold 输入框
         if (sceneThresholdGroup && sceneThresholdInput) {
@@ -362,7 +491,8 @@ block content
       });
     }
 
-    updateQualityModeUI('crf');
+    updateSceneThresholdUI();
+    updateQualityModeUI(currentQualityMode);
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -376,6 +506,7 @@ block content
       const scale = formData.get('scale');
       const qualityMode = formData.get('qualityMode') || 'crf';
       const bitrateValue = formData.get('bitrateKbps');
+      const bitrateNumeric = Number(bitrateValue);
       if (!codec || !impl || !profile || !preset || !scale) {
         message.textContent = '请输入完整的输入、输出与编码选项';
         return;
@@ -407,6 +538,8 @@ block content
         return;
       }
       const enableVmaf = formData.get('enableVmaf') === 'on' || hasVmafRange || perScene;
+      const vmafTimeout = parseInt(formData.get('vmafTimeout'), 10);
+
       const payload = {
         inputPath: formData.get('inputPath'),
         outputPath: formData.get('outputPath'),
@@ -419,7 +552,7 @@ block content
           crf,
           scale,
           qualityMode,
-          bitrateKbps: qualityMode === 'bitrate' ? Number(bitrateValue) : null,
+          bitrateKbps: qualityMode === 'bitrate' ? bitrateNumeric : null,
           enableVmaf,
           vmafMin: hasVmafRange ? vmafMin : null,
           vmafMax: hasVmafRange ? vmafMax : null,
@@ -427,6 +560,24 @@ block content
           sceneThreshold: perScene ? (sceneThreshold || 0.4) : null
         }
       };
+      persistFormState({
+        inputPath: formData.get('inputPath') || '',
+        outputPath: formData.get('outputPath') || '',
+        codec,
+        impl,
+        profile,
+        preset,
+        crf: qualityMode === 'crf' ? crf : null,
+        scale,
+        qualityMode,
+        bitrateKbps: qualityMode === 'bitrate' && Number.isFinite(bitrateNumeric) ? bitrateNumeric : null,
+        enableVmaf,
+        vmafMin: hasVmafRange ? vmafMin : null,
+        vmafMax: hasVmafRange ? vmafMax : null,
+        perScene,
+        sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null,
+        vmafTimeout: Number.isFinite(vmafTimeout) ? vmafTimeout : null
+      });
       const res = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

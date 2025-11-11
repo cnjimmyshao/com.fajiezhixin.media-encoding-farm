@@ -3,6 +3,7 @@
  * @description 提供创建、查询、更新与审计日志写入能力
  */
 import { randomUUID } from 'node:crypto';
+import { dirname, basename, extname, join } from 'node:path';
 import { db } from '../db/sql.mjs';
 
 /**
@@ -47,20 +48,27 @@ export async function createJob(payload) {
   const id = randomUUID();
   const now = new Date().toISOString();
   const paramsJson = payload.params ? JSON.stringify(payload.params) : null;
+
+  const { outputPath } = payload;
+  const dir = dirname(outputPath);
+  const ext = extname(outputPath);
+  const name = basename(outputPath, ext);
+  const newOutputPath = join(dir, `${name}-${id}${ext}`);
+
   await db.run(
     `INSERT INTO jobs (id, input_path, output_path, codec, impl, params_json, status, progress, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)`
       ,
     id,
     payload.inputPath,
-    payload.outputPath,
+    newOutputPath,
     payload.codec,
     payload.impl,
     paramsJson,
     now,
     now
   );
-  await writeAudit('create', id, { ...payload, id });
+  await writeAudit('create', id, { ...payload, id, outputPath: newOutputPath });
   return getJobById(id);
 }
 
