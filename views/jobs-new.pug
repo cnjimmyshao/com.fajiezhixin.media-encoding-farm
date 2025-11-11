@@ -73,6 +73,13 @@ block content
       label(class="checkbox-option")
         input(type="checkbox", id="perScene", name="perScene")
         span 启用按场景切片编码（生成场景片段并合并输出）
+      
+      div(id="sceneThresholdGroup", class="hidden")
+        label(for="sceneThreshold") 场景检测灵敏度
+        input(type="number", id="sceneThreshold", name="sceneThreshold", 
+              min="0.01", max="1", step="0.01", value="0.4")
+        p(class="field-hint") 值越小检测越敏感（0.01-1.0），默认 0.4。快速剪辑视频建议 0.2-0.3，慢节奏内容建议 0.5-0.6。
+      
       p(class="field-hint") 开启后将先用 FFmpeg 场景检测切片，每个片段独立调节码率以满足目标 VMAF，再合并生成最终文件及 HLS/DASH。
       label(for="sceneThresh") 场景检测阈值（0-1，建议 0.4）
       input(type="number", id="sceneThresh", name="sceneThresh", step="0.01", min="0.01", max="1", value="0.4", disabled)
@@ -84,6 +91,9 @@ block content
         input(type="checkbox", id="enableVmaf", name="enableVmaf")
         span 启用 VMAF 质量评估
       p(class="field-hint") 选择后将在任务完成后运行 VMAF 评估，可能增加额外耗时。
+      label(for="vmafTimeout") VMAF 超时时间（秒）
+      input(type="number", id="vmafTimeout", name="vmafTimeout", min="1", step="1", placeholder="例如 300")
+      p(class="field-hint") 为 VMAF 分析设置一个超时时间，防止进程卡死。
 
     button(type="submit") 提交任务
   p#form-message
@@ -105,8 +115,11 @@ block content
     const vmafMinInput = document.getElementById('vmafMin');
     const vmafMaxInput = document.getElementById('vmafMax');
     const perSceneInput = document.getElementById('perScene');
+    const sceneThresholdGroup = document.getElementById('sceneThresholdGroup');
+    const sceneThresholdInput = document.getElementById('sceneThreshold');
     const sceneThreshInput = document.getElementById('sceneThresh');
     const enableVmafInput = document.getElementById('enableVmaf');
+    const vmafTimeoutInput = document.getElementById('vmafTimeout');
     let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
@@ -364,6 +377,9 @@ block content
       if (vmafMaxInput) {
         vmafMaxInput.value = Number.isFinite(state.vmafMax) ? state.vmafMax : '';
       }
+      if (vmafTimeoutInput) {
+        vmafTimeoutInput.value = Number.isFinite(state.vmafTimeout) ? state.vmafTimeout : '';
+      }
     }
 
     codecOptionsContainer.addEventListener('change', (event) => {
@@ -434,23 +450,34 @@ block content
 
     function updateQualityModeUI(mode) {
       currentQualityMode = mode;
-      if (mode === 'bitrate') {
-        crfFieldset.classList.add('hidden');
+      
+      // 隐藏所有模式相关的fieldset
+      crfFieldset.classList.add('hidden');
+      bitrateFieldset.classList.add('hidden');
+      vmafFieldset.classList.add('hidden');
+      
+      // 显示当前模式对应的fieldset
+      if (mode === 'crf') {
+        crfFieldset.classList.remove('hidden');
+        setCrfGroupRequired(true);
+      } else if (mode === 'bitrate') {
         bitrateFieldset.classList.remove('hidden');
         setCrfGroupRequired(false);
-      } else {
-        crfFieldset.classList.remove('hidden');
-        bitrateFieldset.classList.add('hidden');
-        setCrfGroupRequired(true);
+        if (bitrateInput) {
+          bitrateInput.required = true;
+          bitrateInput.disabled = false;
+        }
+      } else if (mode === 'vmaf') {
+        vmafFieldset.classList.remove('hidden');
+        setCrfGroupRequired(false);
       }
-      if (bitrateInput) {
-        bitrateInput.required = mode === 'bitrate';
-        bitrateInput.disabled = mode !== 'bitrate';
-      }
-      const shouldEnableVmaf = mode === 'bitrate' || isPerSceneEnabled();
+      
+      // VMAF输入框只在VMAF模式下启用
+      const shouldEnableVmaf = mode === 'vmaf';
       [vmafMinInput, vmafMaxInput].forEach((input) => {
         if (input) {
           input.disabled = !shouldEnableVmaf;
+          input.required = shouldEnableVmaf;
         }
       });
     }
@@ -464,6 +491,14 @@ block content
       perSceneInput.addEventListener('change', () => {
         updateSceneThresholdUI();
         updateQualityModeUI(currentQualityMode);
+        // 显示或隐藏 sceneThreshold 输入框
+        if (sceneThresholdGroup && sceneThresholdInput) {
+          if (perSceneInput.checked) {
+            sceneThresholdGroup.classList.remove('hidden');
+          } else {
+            sceneThresholdGroup.classList.add('hidden');
+          }
+        }
       });
     }
 
@@ -497,25 +532,31 @@ block content
       }
       const vmafMin = parseFloat(formData.get('vmafMin'));
       const vmafMax = parseFloat(formData.get('vmafMax'));
-      const hasVmafRange = Number.isFinite(vmafMin) && Number.isFinite(vmafMax);
+      const isVmafMode = qualityMode === 'vmaf';
+      const hasVmafRange = isVmafMode && Number.isFinite(vmafMin) && Number.isFinite(vmafMax);
+      
+      if (isVmafMode && !hasVmafRange) {
+        message.textContent = 'VMAF 模式必须设置最低值与最高值';
+        return;
+      }
+      
       if (hasVmafRange && vmafMin > vmafMax) {
         message.textContent = 'VMAF 最低值不能大于最高值';
         return;
       }
       const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf || 'bitrate'}`;
       const perScene = perSceneInput?.checked ?? false;
-      const sceneThreshold = parseFloat(formData.get('sceneThresh'));
-      if (perScene) {
-        if (!Number.isFinite(sceneThreshold) || sceneThreshold <= 0 || sceneThreshold > 1) {
-          message.textContent = '请输入 0-1 之间的场景检测阈值';
-          return;
-        }
-      }
+      const sceneThreshold = perScene && sceneThresholdInput ? parseFloat(formData.get('sceneThreshold')) : null;
       if (perScene && !hasVmafRange) {
         message.textContent = '场景编码模式需要设置 VMAF 最低值与最高值';
         return;
       }
+      if (perScene && sceneThreshold !== null && (sceneThreshold < 0.01 || sceneThreshold > 1)) {
+        message.textContent = '场景检测灵敏度必须在 0.01-1.0 范围内';
+        return;
+      }
       const enableVmaf = formData.get('enableVmaf') === 'on' || hasVmafRange || perScene;
+      const vmafTimeout = parseInt(formData.get('vmafTimeout'), 10);
 
       const payload = {
         inputPath: formData.get('inputPath'),
@@ -530,11 +571,11 @@ block content
           scale,
           qualityMode,
           bitrateKbps: qualityMode === 'bitrate' ? bitrateNumeric : null,
-          enableVmaf,
-          vmafMin: hasVmafRange ? vmafMin : null,
-          vmafMax: hasVmafRange ? vmafMax : null,
+          enableVmaf: isVmafMode || perScene,
+          vmafMin: isVmafMode ? vmafMin : null,
+          vmafMax: isVmafMode ? vmafMax : null,
           perScene,
-          sceneThreshold: perScene ? sceneThreshold : null,
+          sceneThreshold: perScene ? (sceneThreshold || 0.4) : null
         }
       };
       persistFormState({
@@ -548,11 +589,12 @@ block content
         scale,
         qualityMode,
         bitrateKbps: qualityMode === 'bitrate' && Number.isFinite(bitrateNumeric) ? bitrateNumeric : null,
-        enableVmaf,
-        vmafMin: hasVmafRange ? vmafMin : null,
-        vmafMax: hasVmafRange ? vmafMax : null,
+        enableVmaf: isVmafMode || perScene,
+        vmafMin: isVmafMode ? vmafMin : null,
+        vmafMax: isVmafMode ? vmafMax : null,
         perScene,
         sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null,
+        vmafTimeout: Number.isFinite(vmafTimeout) ? vmafTimeout : null
       });
       const res = await fetch('/api/jobs', {
         method: 'POST',

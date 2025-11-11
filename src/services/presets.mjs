@@ -271,7 +271,7 @@ export const codecMatrix = {
             defaultCrf: '20'
           },
           {
-            key: 'fast',
+            key: 'main',
             label: 'Main（通用）',
             args: ['-profile:v', 'main', '-pix_fmt', 'yuv420p'],
             defaultPreset: 'faster',
@@ -524,12 +524,33 @@ export const codecMatrix = {
   }
 };
 
-function collectPresetArgs(encoder, profile, preset, quality) {
+function collectPresetArgs(encoder, profile, preset, quality, codec, impl) {
   const args = [
     ...(encoder.baseArgs ?? []),
     ...(profile?.args ?? []),
     ...(preset?.args ?? [])
   ];
+  
+  // Add codec-specific extra arguments
+  if (codec && impl) {
+    // VP9 needs row multi-threading
+    if (codec === 'vp9' && impl === 'libvpx-vp9') {
+      args.push('-row-mt', '1');
+      if (quality?.mode === 'crf') {
+        args.push('-b:v', '0'); // CRF mode needs zero bitrate
+      }
+    }
+    
+    // AV1 defaults to 10-bit
+    if (codec === 'av1' && impl === 'svt-av1') {
+      // Check if pixel format is already set in profile args
+      const hasPixelFormatInProfile = profile?.args?.some(arg => arg.includes('pix_fmt'));
+      if (!hasPixelFormatInProfile) {
+        args.push('-pix_fmt', 'yuv420p10le');
+      }
+    }
+  }
+  
   if (!quality) {
     const qualityFlag = encoder.qualityFlag ?? DEFAULT_QUALITY_FLAG;
     if (qualityFlag && profile?.defaultCrf) {
@@ -627,18 +648,60 @@ export function buildVideoArgs(codecKey, encoderKey, profileKey, presetKey, crfK
   const preset = presetCandidateKey
     ? presets.find((item) => item.key === presetCandidateKey) ?? presets[0]
     : presets[0];
+  
+  let args = [];
   if (qualityOverride) {
-    return collectPresetArgs(encoder, profile, preset, qualityOverride);
+    args = collectPresetArgs(encoder, profile, preset, qualityOverride, codecKey, encoderKey);
+  } else {
+    const crfOptions = encoder.crfOptions ?? [];
+    const crfCandidateKey = crfKey ?? profile.defaultCrf ?? crfOptions[0]?.key;
+    const crf = crfCandidateKey
+      ? crfOptions.find((item) => item.key === crfCandidateKey) ?? crfOptions[0]
+      : crfOptions[0];
+    if (!crf) {
+      return null;
+    }
+    args = collectPresetArgs(encoder, profile, preset, { mode: 'crf', value: crf.value }, codecKey, encoderKey);
   }
-  const crfOptions = encoder.crfOptions ?? [];
-  const crfCandidateKey = crfKey ?? profile.defaultCrf ?? crfOptions[0]?.key;
-  const crf = crfCandidateKey
-    ? crfOptions.find((item) => item.key === crfCandidateKey) ?? crfOptions[0]
-    : crfOptions[0];
-  if (!crf) {
+  
+  if (!args || args.length === 0) {
     return null;
   }
-  return collectPresetArgs(encoder, profile, preset, { mode: 'crf', value: crf.value });
+  
+  // Add codec-specific extra arguments (e.g., VP9 -row-mt, AV1 10-bit)
+  // Note: collectPresetArgs already adds these, so we don't need to add them again
+  // const extraArgs = getCodecSpecificExtraArgs(codecKey, encoderKey, qualityOverride?.mode);
+  // if (extraArgs.length > 0) {
+  //   args = [...args, ...extraArgs];
+  // }
+  
+  return args;
+}
+
+/**
+ * Get codec-specific extra arguments
+ */
+function getCodecSpecificExtraArgs(codec, impl, qualityMode) {
+  const extraArgs = [];
+  
+  // VP9 needs row multi-threading
+  if (codec === 'vp9' && impl === 'libvpx-vp9') {
+    extraArgs.push('-row-mt', '1');
+    if (qualityMode === 'crf') {
+      extraArgs.push('-b:v', '0'); // CRF mode needs zero bitrate
+    }
+  }
+  
+  // AV1 defaults to 10-bit
+  if (codec === 'av1' && impl === 'svt-av1') {
+    // Check if pixel format is already set, if not add 10-bit
+    const hasPixelFormat = extraArgs.some(arg => arg.includes('pix_fmt'));
+    if (!hasPixelFormat) {
+      extraArgs.push('-pix_fmt', 'yuv420p10le');
+    }
+  }
+  
+  return extraArgs;
 }
 
 export function codecOptions(options = {}) {
@@ -690,9 +753,18 @@ export function getResolutionPreset(key) {
 
 /**
  * @description 获取音频编码参数
+ * @param {string} outputPath 输出文件路径
  * @returns {string[]} 音频参数数组
  */
-export function audioArgs() {
+export function audioArgs(outputPath = '') {
+  const ext = outputPath.toLowerCase().split('.').pop();
+  
+  // WebM 容器只支持 Vorbis 或 Opus 音频
+  if (ext === 'webm') {
+    return ['-c:a', 'libvorbis', '-b:a', '128k'];
+  }
+  
+  // 默认使用 AAC
   return ['-c:a', 'aac', '-b:a', '128k'];
 }
 
