@@ -1,0 +1,11 @@
+{
+  "inputPath": "/media/sample.mp4",
+  "outputPath": "/media/output-crf.mp4",
+  "codec": "h264",
+  "impl": "ffmpeg",
+  "params": {
+    "qualityMode": "crf",
+    "crf": 23,
+    "scale": "source"
+  }
+}

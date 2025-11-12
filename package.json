@@ -1,17 +1,56 @@
 {
-  "name": "encoding-farm",
-  "version": "0.1.0",
+  "name": "video-encoding-farm",
+  "version": "0.2.0",
+  "description": "功能丰富的单机视频转码管理系统，支持智能场景检测、VMAF质量评估、CUDA加速等高级特性",
+  "keywords": [
+    "video",
+    "encoding",
+    "transcoding",
+    "ffmpeg",
+    "vmaf",
+    "cuda",
+    "scene-detection",
+    "hls",
+    "dash"
+  ],
+  "homepage": "https://github.com/yourusername/video-encoding-farm",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/video-encoding-farm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/video-encoding-farm/issues"
+  },
+  "license": "MIT",
+  "author": "Your Name <your.email@example.com>",
   "packageManager": "pnpm@10.19.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
   "scripts": {
     "start": "NODE_ENV=production node --env-file .env --experimental-sqlite scripts/boot-app.mjs",
     "dev": "NODE_ENV=development node --env-file .env --experimental-sqlite scripts/boot-app.mjs",
     "migrate": "node --env-file .env --experimental-sqlite src/db/migrate.mjs",
-    "cleanup": "node scripts/cleanup-temp-files.mjs"
+    "cleanup": "node scripts/cleanup-temp-files.mjs",
+    "test": "node --test src/**/*.spec.mjs",
+    "test:watch": "node --test --watch src/**/*.spec.mjs",
+    "docs": "echo 'See docs/ directory for detailed documentation'"
   },
   "dependencies": {
     "express": "^5.0.0",
     "pug": "^3.0.2",
     "morgan": "^1.10.0"
-  }
+  },
+  "devDependencies": {},
+  "files": [
+    "app.mjs",
+    "config/",
+    "src/",
+    "views/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ]
 }

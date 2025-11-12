@@ -1,0 +1,16 @@
+{
+  "inputPath": "/media/sample.mp4",
+  "outputPath": "/media/output-scenes.mp4",
+  "codec": "h264",
+  "impl": "ffmpeg",
+  "params": {
+    "qualityMode": "bitrate",
+    "bitrateKbps": 3000,
+    "scale": "source",
+    "perScene": true,
+    "sceneThreshold": 0.4,
+    "enableVmaf": true,
+    "vmafMin": 85,
+    "vmafMax": 95
+  }
+}

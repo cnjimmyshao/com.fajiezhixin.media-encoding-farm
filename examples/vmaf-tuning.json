@@ -1,0 +1,14 @@
+{
+  "inputPath": "/media/sample.mp4",
+  "outputPath": "/media/output-vmaf.mp4",
+  "codec": "h265",
+  "impl": "ffmpeg",
+  "params": {
+    "qualityMode": "bitrate",
+    "bitrateKbps": 2000,
+    "scale": "1080p",
+    "enableVmaf": true,
+    "vmafMin": 85,
+    "vmafMax": 95
+  }
+}
