@@ -11,56 +11,19 @@ async function computeVmafScore(
   ffmpegBin,
   distortedPath,
   referencePath,
-  config,
-  timeoutMs = 0
+  options = {}
 ) {
-  const logPath = `${distortedPath}.vmaf.json`;
-  const modelVersion = config.vmaf.modelVersion;
-  const nThreads = config.vmaf.nThreads;
-  const nSubsample = config.vmaf.nSubsample;
+  const { reportPath, timeout } = options;
+  const logPath = reportPath || `${distortedPath}.vmaf.json`;
+  const timeoutMs = timeout || 0;
   
-  // 检测CUDA支持
-  let cudaInfo = null;
-  if (config.cuda?.enabled !== false) {
-    try {
-      cudaInfo = await detectCudaSupport(ffmpegBin);
-      if (cudaInfo.enabled) {
-        console.log(`VMAF: 检测到CUDA支持，使用GPU加速 (${cudaInfo.gpuInfo || 'NVIDIA GPU'})`);
-      }
-    } catch (error) {
-      console.log('VMAF: CUDA检测失败，使用CPU版本:', error.message);
-    }
-  }
+  // 使用简化的VMAF参数
+  const modelVersion = 'vmaf_v0.6.1';
+  const nThreads = 4;
+  const nSubsample = 1;
   
-  // 获取视频分辨率信息
-  const [distortedInfo, referenceInfo] = await Promise.all([
-    getVideoInfo(config.ffmpeg.ffprobe, distortedPath),
-    getVideoInfo(config.ffmpeg.ffprobe, referencePath)
-  ]);
-  
-  if (!distortedInfo.width || !distortedInfo.height) {
-    throw new Error('无法获取输出视频分辨率');
-  }
-  
-  // 构建filter graph，处理分辨率不匹配的情况
-  let filterGraph;
-  if (!referenceInfo.width || !referenceInfo.height) {
-    // 如果无法获取参考视频分辨率，直接计算（可能会失败）
-    filterGraph = cudaInfo?.enabled ? 
-      `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf_cuda=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}` :
-      `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
-  } else if (distortedInfo.width === referenceInfo.width && distortedInfo.height === referenceInfo.height) {
-    // 分辨率相同，直接计算
-    filterGraph = cudaInfo?.enabled ?
-      `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf_cuda=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}` :
-      `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
-  } else {
-    // 分辨率不同，将参考视频缩放到与输出视频相同的分辨率
-    console.log(`VMAF: 分辨率不匹配，将参考视频从 ${referenceInfo.width}x${referenceInfo.height} 缩放到 ${distortedInfo.width}x${distortedInfo.height}`);
-    filterGraph = cudaInfo?.enabled ?
-      `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[ref]scale=${distortedInfo.width}:${distortedInfo.height}[ref_scaled];[dist][ref_scaled]libvmaf_cuda=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}` :
-      `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[ref]scale=${distortedInfo.width}:${distortedInfo.height}[ref_scaled];[dist][ref_scaled]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
-  }
+  // 简化的filter graph,不处理分辨率匹配
+  const filterGraph = `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
   
   const args = [
     "-loglevel",
@@ -155,42 +118,6 @@ function isVmafWithin(metrics, targets) {
     return false;
   }
   return score >= targets.min && score <= targets.max;
-}
-
-async function getVideoInfo(ffprobeBin, inputPath) {
-  return new Promise((resolve) => {
-    const args = [
-      "-loglevel",
-      "error",
-      "-hide_banner",
-      "-select_streams",
-      "v:0",
-      "-show_entries",
-      "stream=width,height",
-      "-of",
-      "json",
-      inputPath,
-    ];
-    const child = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        resolve({ width: null, height: null });
-        return;
-      }
-      try {
-        const data = JSON.parse(stdout);
-        const stream = data?.streams?.[0];
-        resolve({ width: stream?.width, height: stream?.height });
-      } catch {
-        resolve({ width: null, height: null });
-      }
-    });
-    child.on("error", () => resolve({ width: null, height: null }));
-  });
 }
 
 

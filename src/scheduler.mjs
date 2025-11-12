@@ -53,8 +53,7 @@ async function schedulerLoop(config) {
       try {
         const duration = await probeDuration(
           config.ffmpeg.ffprobe,
-          prepared.job.input_path,
-          jobLog
+          prepared.job.input_path
         );
         if (duration === null) {
           await updateJob(job.id, {
@@ -69,8 +68,11 @@ async function schedulerLoop(config) {
           await persistJobLog(jobLog, job.output_path);
           continue;
         }
-        await runJob(prepared.job, duration, config, jobLog);
+        logger.info(`任务 #${job.id} - 时长: ${duration.toFixed(2)}s, 开始编码`);
+        await runJob(prepared.job, duration, config);
+        logger.info(`任务 #${job.id} 编码完成`);
       } catch (error) {
+        logger.error(`任务 #${job.id} 执行失败:`, error);
         await updateJob(job.id, {
           status: 'failed',
           error_msg: `FFmpeg 任务执行失败: ${error?.message ?? '未知错误'}`

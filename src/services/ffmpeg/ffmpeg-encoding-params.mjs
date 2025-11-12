@@ -151,6 +151,17 @@ function decideNextBitrate(current, metrics, targets, config) {
 
 
 function parseVmafTargets(params = {}) {
+  // 支持 targetVmaf 对象或单独的 vmafMin/vmafMax
+  if (params.targetVmaf && typeof params.targetVmaf === 'object') {
+    const min = Number(params.targetVmaf.min);
+    const max = Number(params.targetVmaf.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max > 100 || min > max) {
+      return null;
+    }
+    return { min, max };
+  }
+
+  // 向后兼容：单独参数
   const min = Number(params.vmafMin);
   const max = Number(params.vmafMax);
   if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max > 100 || min > max) {

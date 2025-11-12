@@ -11,6 +11,51 @@ import {
 } from '../controllers/jobs.mjs';
 import { cancelRunningJob } from '../services/ffmpeg-runner.mjs';
 
+function normalizeJobParams(rawParams = {}) {
+  const params = { ...rawParams };
+  params.scale = params.scale || 'source';
+  params.perScene = Boolean(params.perScene);
+  const qualityMode = params.qualityMode === 'bitrate' ? 'bitrate' : 'crf';
+  params.qualityMode = qualityMode;
+  if (qualityMode === 'bitrate') {
+    const bitrate = Number(params.bitrateKbps);
+    if (!Number.isFinite(bitrate) || bitrate <= 0) {
+      return { error: '码率模式需要输入有效的码率（Kbps）' };
+    }
+    params.bitrateKbps = Math.round(bitrate);
+  } else if (!params.crf) {
+    return { error: 'CRF 模式需要选择 CRF 值' };
+  } else {
+    delete params.bitrateKbps;
+  }
+  const vmafMin = Number(params.vmafMin);
+  const vmafMax = Number(params.vmafMax);
+  if (Number.isFinite(vmafMin) && Number.isFinite(vmafMax) && vmafMin >= 0 && vmafMax <= 100 && vmafMin <= vmafMax) {
+    params.vmafMin = vmafMin;
+    params.vmafMax = vmafMax;
+    params.enableVmaf = true;
+  } else {
+    delete params.vmafMin;
+    delete params.vmafMax;
+  }
+  const hasVmafRange = Number.isFinite(params.vmafMin) && Number.isFinite(params.vmafMax);
+  if (params.perScene) {
+    if (!hasVmafRange) {
+      return { error: '场景编码需要设置有效的 VMAF 范围' };
+    }
+    const sceneThreshold = Number(params.sceneThreshold);
+    if (!Number.isFinite(sceneThreshold) || sceneThreshold <= 0 || sceneThreshold > 1) {
+      return { error: '场景编码需要 0-1 之间的阈值（sceneThreshold）' };
+    }
+    params.sceneThreshold = sceneThreshold;
+  } else {
+    delete params.sceneThreshold;
+  }
+  params.enableVmaf = Boolean(params.enableVmaf);
+
+  return params;
+}
+
 const router = Router();
 
 function assertJob(job, res) {
@@ -101,48 +146,3 @@ router.post('/jobs/:id/retry', async (req, res, next) => {
 });
 
 export default router;
-
-function normalizeJobParams(rawParams = {}) {
-  const params = { ...rawParams };
-  params.scale = params.scale || 'source';
-  params.perScene = Boolean(params.perScene);
-  const qualityMode = params.qualityMode === 'bitrate' ? 'bitrate' : 'crf';
-  params.qualityMode = qualityMode;
-  if (qualityMode === 'bitrate') {
-    const bitrate = Number(params.bitrateKbps);
-    if (!Number.isFinite(bitrate) || bitrate <= 0) {
-      return { error: '码率模式需要输入有效的码率（Kbps）' };
-    }
-    params.bitrateKbps = Math.round(bitrate);
-  } else if (!params.crf) {
-    return { error: 'CRF 模式需要选择 CRF 值' };
-  } else {
-    delete params.bitrateKbps;
-  }
-  const vmafMin = Number(params.vmafMin);
-  const vmafMax = Number(params.vmafMax);
-  if (Number.isFinite(vmafMin) && Number.isFinite(vmafMax) && vmafMin >= 0 && vmafMax <= 100 && vmafMin <= vmafMax) {
-    params.vmafMin = vmafMin;
-    params.vmafMax = vmafMax;
-    params.enableVmaf = true;
-  } else {
-    delete params.vmafMin;
-    delete params.vmafMax;
-  }
-  const hasVmafRange = Number.isFinite(params.vmafMin) && Number.isFinite(params.vmafMax);
-  if (params.perScene) {
-    if (!hasVmafRange) {
-      return { error: '场景编码需要设置有效的 VMAF 范围' };
-    }
-    const sceneThreshold = Number(params.sceneThreshold);
-    if (!Number.isFinite(sceneThreshold) || sceneThreshold <= 0 || sceneThreshold > 1) {
-      return { error: '场景编码需要 0-1 之间的阈值（sceneThreshold）' };
-    }
-    params.sceneThreshold = sceneThreshold;
-  } else {
-    delete params.sceneThreshold;
-  }
-  params.enableVmaf = Boolean(params.enableVmaf);
-
-  return params;
-}
