@@ -13,18 +13,17 @@ async function computeVmafScore(
   referencePath,
   options = {}
 ) {
-  const { reportPath, timeout } = options;
+  const { reportPath } = options;
   const logPath = reportPath || `${distortedPath}.vmaf.json`;
-  const timeoutMs = timeout || 0;
-  
+
   // 使用简化的VMAF参数
   const modelVersion = 'vmaf_v0.6.1';
   const nThreads = 4;
   const nSubsample = 1;
-  
-  // 简化的filter graph,不处理分辨率匹配
-  const filterGraph = `[0:v]setpts=PTS-STARTPTS[dist];[1:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
-  
+
+  // 添加分辨率缩放以确保两个输入分辨率匹配
+  const filterGraph = `[0:v]setpts=PTS-STARTPTS[dist_main];[1:v]setpts=PTS-STARTPTS[ref_in];[ref_in][dist_main]scale2ref=flags=bicubic[ref_scaled][dist_scaled];[dist_scaled][ref_scaled]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
+
   const args = [
     "-loglevel",
     "error",
@@ -47,20 +46,7 @@ async function computeVmafScore(
     stderr += chunk.toString();
   });
 
-  const closePromise = once(child, "close");
-  const timeoutPromise =
-    timeoutMs > 0
-      ? new Promise((_, reject) => {
-          setTimeout(() => {
-            child.kill("SIGKILL");
-            reject(new Error(`VMAF 计算超时 (${timeoutMs}ms)`));
-          }, timeoutMs);
-        })
-      : null;
-
-  const [code] = timeoutPromise
-    ? await Promise.race([closePromise, timeoutPromise])
-    : await closePromise;
+  const [code] = await once(child, "close");
 
   if (code !== 0) {
     console.error("VMAF stderr:", stderr);

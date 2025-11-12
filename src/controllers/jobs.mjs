@@ -3,8 +3,9 @@
  * @description 提供创建、查询、更新与审计日志写入能力
  */
 import { randomUUID } from 'node:crypto';
-import { dirname, basename, extname, join } from 'node:path';
+import { dirname, basename, extname, join, normalize } from 'node:path';
 import { db } from '../db/sql.mjs';
+import e from 'express';
 
 /**
  * @description 解析数据库行到业务对象
@@ -49,11 +50,14 @@ export async function createJob(payload) {
   const now = new Date().toISOString();
   const paramsJson = payload.params ? JSON.stringify(payload.params) : null;
 
-  const { outputPath } = payload;
+  const { outputPath = normalize(outputPath) } = payload;
+  // console.log('Normalized outputPath:', outputPath);
   const dir = dirname(outputPath);
   const ext = extname(outputPath);
   const name = basename(outputPath, ext);
-  const newOutputPath = join(dir, `${name}-${id}${ext}`);
+  // const newOutputPath = join(dir, `${name}-${id}${ext}`);
+  const newOutputPath = join(dir, `${name}[${id}].${ext}`);
+  // console.log('Generated newOutputPath:', newOutputPath);
 
   await db.run(
     `INSERT INTO jobs (id, input_path, output_path, codec, impl, params_json, status, progress, created_at, updated_at)
@@ -108,7 +112,7 @@ export async function getJobById(id) {
  * @returns {Promise<object>} 更新后的任务
  */
 export async function updateJob(id, fields) {
-  const allowedFields = ['status', 'progress', 'error_msg', 'metrics_json'];
+  const allowedFields = ['status', 'progress', 'error_msg', 'metrics_json', 'ffmpeg_command'];
   const keys = Object.keys(fields).filter(key => allowedFields.includes(key));
   if (!keys.length) {
     return getJobById(id);
@@ -157,4 +161,44 @@ export async function getNextQueuedJob() {
 export async function hasRunningJob() {
   const row = await db.get(`SELECT COUNT(1) AS cnt FROM jobs WHERE status = 'running'`);
   return row?.cnt > 0;
+}
+
+/**
+ * @description 保存 FFmpeg/FFprobe 命令记录
+ * @param {string} jobId 任务标识
+ * @param {string} commandType 命令类型 ('ffmpeg' 或 'ffprobe')
+ * @param {string} commandText 完整命令文本
+ * @param {number} exitCode 退出码 (可选)
+ * @param {string} errorOutput 错误输出 (可选)
+ * @returns {Promise<object>} 创建的命令记录
+ */
+export async function saveFfmpegCommand(jobId, commandType, commandText, exitCode = null, errorOutput = null) {
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+
+  await db.run(
+    `INSERT INTO job_ffmpeg_commands (id, job_id, command_type, command_text, exit_code, error_output, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    id,
+    jobId,
+    commandType,
+    commandText,
+    exitCode,
+    errorOutput,
+    createdAt
+  );
+
+  return { id, jobId, commandType, commandText, exitCode, errorOutput, createdAt };
+}
+
+/**
+ * @description 获取某个 job 的所有 FFmpeg/FFprobe 命令
+ * @param {string} jobId 任务标识
+ * @returns {Promise<Array<object>>} 命令记录数组
+ */
+export async function getFfmpegCommandsByJob(jobId) {
+  const rows = await db.all(
+    `SELECT * FROM job_ffmpeg_commands WHERE job_id = ? ORDER BY created_at ASC`,
+    jobId
+  );
+  return rows || [];
 }

@@ -252,7 +252,6 @@ async function runPerSceneJob(job, durationSec, config) {
           job.input_path,
           {
             reportPath: finalReportPath,
-            timeout: job.params?.vmafTimeout ?? null,
           }
         );
         console.log(`[场景编码] 最终 VMAF 计算完成:`, finalVmafStats);

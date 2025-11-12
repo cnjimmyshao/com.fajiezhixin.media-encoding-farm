@@ -8,6 +8,7 @@ import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { stat, writeFile, mkdir } from "node:fs/promises";
 import { dirname, basename, extname, join } from "node:path";
+import { saveFfmpegCommand } from "../../controllers/jobs.mjs";
 import { buildFfmpegArgs } from "./ffmpeg-encoding-params.mjs";
 import { updateJob } from "../../controllers/jobs.mjs";
 import { computeVmafScore } from "./ffmpeg-vmaf-calculator.mjs";
@@ -198,6 +199,22 @@ async function runFfmpegProcess(
     "-hide_banner",
     ...ffmpegArgs,
   ];
+
+  // 保存完整的 FFmpeg 命令到新表
+  const fullCommand = `${config.ffmpeg.bin} ${argsWithLogLevel.map(arg => {
+    // 包裹包含空格或特殊字符的参数
+    if (arg.includes(' ') || arg.includes('\\')) {
+      return `"${arg}"`;
+    }
+    return arg;
+  }).join(' ')}`;
+
+  try {
+    await saveFfmpegCommand(job.id, 'ffmpeg', fullCommand);
+  } catch (err) {
+    console.warn(`[FFmpeg] 无法保存命令到数据库: ${err.message}`);
+  }
+
   const child = spawn(config.ffmpeg.bin, argsWithLogLevel, {
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -251,6 +268,15 @@ async function runFfmpegProcess(
     clearTimeout(timeoutTimer);
   }
 
+  // 更新命令记录 (添加退出码和错误输出)
+  try {
+    if (code !== 0 && stderrBuffer.trim()) {
+      await saveFfmpegCommand(job.id, 'ffmpeg', fullCommand, code, stderrBuffer.trim());
+    }
+  } catch (err) {
+    console.warn(`[FFmpeg] 无法更新命令结果: ${err.message}`);
+  }
+
   if (signal === "SIGTERM") {
     return { success: false, status: "canceled", progress: lastProgress };
   }
@@ -284,8 +310,77 @@ function cancelRunningJob(jobId) {
   return false;
 }
 
+/**
+ * @description 运行 ffprobe 获取视频完整信息（分辨率、帧率、时长等）
+ * @param {string} ffprobeBin ffprobe 路径
+ * @param {string} inputPath 输入文件路径
+ */
+async function probeVideoInfo(ffprobeBin, inputPath) {
+  const child = spawn(
+    ffprobeBin,
+    [
+      "-loglevel",
+      "error",
+      "-hide_banner",
+      "-show_entries",
+      "stream=width,height,r_frame_rate,duration,codec_name",
+      "-show_entries",
+      "format=duration,size,bit_rate",
+      "-of",
+      "json",
+      inputPath,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] }
+  );
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  const [code] = await once(child, "close");
+  if (code !== 0) {
+    console.warn("ffprobe 获取视频信息失败:", stderr);
+    return null;
+  }
+
+  try {
+    const data = JSON.parse(stdout);
+    const videoStream = data.streams?.find(s => s.codec_type === 'video' || !s.codec_type);
+    const format = data.format;
+
+    if (!videoStream || !format) {
+      return null;
+    }
+
+    // 解析帧率（可能为分数形式，如 "30/1" 或 "29.97"）
+    let fps = null;
+    if (videoStream.r_frame_rate) {
+      const [num, den] = videoStream.r_frame_rate.split('/').map(Number);
+      fps = den ? num / den : num;
+    }
+
+    return {
+      width: Number(videoStream.width),
+      height: Number(videoStream.height),
+      fps: fps,
+      duration: Number(videoStream.duration || format.duration),
+      size: Number(format.size),
+      bitrate: Number(format.bit_rate) / 1000, // 转换为 kbps
+    };
+  } catch (error) {
+    console.warn("解析视频信息失败:", error.message);
+    return null;
+  }
+}
+
 export {
   probeDuration,
+  probeVideoInfo,
   parseFfmpegTime,
   finalizeOnFailure,
   collectMetrics,

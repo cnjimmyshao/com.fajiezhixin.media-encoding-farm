@@ -7,11 +7,13 @@
 - 🎬 **智能场景编码** - 自动检测视频场景边界，为每个场景优化编码参数
 - 📊 **VMAF 质量评估** - 基于 VMAF 分数的动态质量优化，支持目标质量范围调优
 - ⚡ **CUDA 加速** - 自动检测并使用 NVIDIA GPU 硬件加速（NVENC）
-- 🎯 **多编码器支持** - x264, x265, SVT-AV1, VP9, NVENC 等主流编码器
+- 🎯 **多编码器支持** - x264, x265, SVT-AV1, VP9, NVENC (H.264/HEVC/AV1) 等主流编码器
 - 📱 **流媒体输出** - 支持 HLS 和 DASH 流媒体格式生成
 - 🌐 **远程输入** - 支持 HTTP/HTTPS 远程输入源
 - 📋 **完整 API** - RESTful API 和直观的 Web 界面
 - 📝 **审计日志** - 完整的操作审计追踪
+- 🎯 **VMAF 目标模式** - 设置目标 VMAF 分数，系统自动调整编码参数
+- 🔧 **场景切片编码** - 按场景自动分段编码，每段使用最优参数
 
 ## 🚀 快速开始
 
@@ -109,6 +111,18 @@ FFMPEG_TIMEOUT_FACTOR=5
 
 ### 高级功能
 
+#### VMAF 目标质量模式
+设置目标 VMAF 质量范围，系统自动调整编码参数以达到目标质量：
+```json
+{
+  "params": {
+    "qualityMode": "vmaf",
+    "vmafMin": 85,
+    "vmafMax": 95
+  }
+}
+```
+
 #### VMAF 智能调优
 启用 VMAF 后，系统会自动调整编码参数以达到目标质量范围：
 ```json
@@ -138,6 +152,11 @@ FFMPEG_TIMEOUT_FACTOR=5
 #### CUDA 加速
 系统自动检测 NVIDIA GPU 并启用硬件加速，无需手动配置。
 
+支持的 NVENC 编码器：
+- **H.264 NVENC** - 高效视频编码（H.264/AVC）
+- **HEVC NVENC** - 高效视频编码（H.265/HEVC）
+- **AV1 NVENC** - 下一代视频编码（AV1）
+
 ## 🔌 API 参考
 
 ### 创建任务
@@ -149,16 +168,18 @@ FFMPEG_TIMEOUT_FACTOR=5
 {
   "inputPath": "/path/to/input.mp4",
   "outputPath": "/path/to/output.mp4",
-  "codec": "h264|h265|av1|vp9",
-  "impl": "ffmpeg|nvenc",
+  "codec": "h264|hevc|av1|vp9",
+  "impl": "x264|x265|libvpx-vp9|svt-av1|h264_nvenc|hevc_nvenc|av1_nvenc",
   "params": {
-    "qualityMode": "crf|bitrate",
+    "qualityMode": "crf|bitrate|vmaf",
     "crf": 23,
     "bitrateKbps": 2000,
-    "scale": "source|720p|1080p|4k",
+    "scale": "source|360p|480p|720p|1080p",
+    "profile": "baseline|main|high",
+    "preset": "medium|fast|ultrafast",
     "perScene": false,
     "sceneThreshold": 0.4,
-    "enableVmaf": false,
+    "enableVmaf": true,
     "vmafMin": 85,
     "vmafMax": 95
   }
@@ -212,7 +233,17 @@ FFMPEG_TIMEOUT_FACTOR=5
 │   ├── services/         # 服务层
 │   │   ├── ffmpeg-runner.mjs
 │   │   ├── ffmpeg/       # FFmpeg 相关模块
+│   │   │   ├── encoders/ # 编码器配置
+│   │   │   │   ├── impl-x264.mjs
+│   │   │   │   ├── impl-x265.mjs
+│   │   │   │   ├── impl-libvpx-vp9.mjs
+│   │   │   │   ├── impl-svt-av1.mjs
+│   │   │   │   ├── impl-h264-nvenc.mjs
+│   │   │   │   ├── impl-hevc-nvenc.mjs
+│   │   │   │   └── impl-av1-nvenc.mjs
+│   │   │   └── ...
 │   │   ├── logger.mjs
+│   │   ├── hardware-capabilities.mjs
 │   │   └── presets.mjs
 │   └── public/           # 静态资源
 ├── views/                # Pug 模板
@@ -269,6 +300,59 @@ node --test src/controllers/jobs.spec.mjs
 SELECT * FROM audit_logs WHERE entity = 'jobs' ORDER BY created_at DESC;
 ```
 
+## 🧪 测试
+
+### 编码器测试
+
+项目提供完整的编码器测试脚本：
+
+```bash
+# 测试所有编码器（使用 ultrafast 加速）
+bash temp/test-all-codecs-ultrafast.sh
+
+# 测试结果报告位置
+# - 测试日志: temp/test-results.log
+# - 输出文件: temp/output/
+# - 详细报告: temp/TEST_REPORT.md
+```
+
+**测试覆盖**：
+- ✅ CPU 编码器: H.264 (x264), HEVC (x265), VP9 (libvpx-vp9), AV1 (SVT-AV1)
+- ✅ NVENC 硬件编码器: H.264 NVENC, HEVC NVENC, AV1 NVENC
+- ✅ 不同质量模式: CRF、Bitrate、VMAF 目标
+- ✅ 分辨率缩放: 360p, 480p, 720p, 1080p
+- ✅ 场景检测和分段编码
+
+### 单元测试
+
+项目使用 Node.js 内置测试运行器：
+
+```bash
+# 运行所有测试
+node --test src/**/*.spec.mjs
+
+# 运行特定测试
+node --test src/controllers/jobs.spec.mjs
+
+# 监听模式
+node --test --watch src/**/*.spec.mjs
+```
+
+### 硬件检测测试
+
+验证硬件编码器支持：
+
+```bash
+# 检测可用编码器
+node temp/test-hardware-detect.mjs
+
+# 预期输出：
+# ✅ NVENC 编码器 (NVIDIA):
+#   - h264_nvenc
+#   - hevc_nvenc
+#   - av1_nvenc
+```
+
 ## 🚨 故障排查
 
 ### 常见问题
@@ -280,15 +364,23 @@ SELECT * FROM audit_logs WHERE entity = 'jobs' ORDER BY created_at DESC;
 2. **CUDA 未启用**
    - 检查 NVIDIA 驱动是否安装
    - 验证 ffmpeg 是否支持 NVENC
+   - 运行测试脚本确认检测: `node temp/test-hardware-detect.mjs`
 
 3. **VMAF 失败**
    - 确保 VMAF 模型文件存在
    - 检查 ffmpeg 编译时是否启用 VMAF 支持
+   - 查看任务日志获取详细错误
+
+4. **编码器不显示**
+   - 运行硬件检测测试
+   - 检查浏览器控制台是否有 JavaScript 错误
 
 ### 日志位置
 
-- 控制台输出（使用 Morgan 日志中间件）
-- 任务日志：工作区目录下的 `.log` 文件
+- **控制台输出**: 使用 Morgan 日志中间件
+- **任务日志**: 工作区目录下的 `.log` 文件
+- **测试日志**: `temp/test-results.log`
+- **系统日志**: SQLite 数据库中的 `audit_logs` 表
 
 ## 🔒 安全建议
 

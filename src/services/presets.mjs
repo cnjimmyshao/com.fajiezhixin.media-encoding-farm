@@ -48,6 +48,105 @@ export const codecMatrix = {
           { key: '28', label: 'CRF 28（高质量）', value: '28' },
           { key: '26', label: 'CRF 26（极致质量）', value: '26' }
         ]
+      },
+      av1_nvenc: {
+        label: 'NVIDIA AV1（NVENC，支持 RTX 40 系）',
+        requiresHardware: true,
+        ffmpegEncoder: 'av1_nvenc',
+        baseArgs: ['-c:v', 'av1_nvenc'],
+        qualityFlag: '-cq',
+        presets: [
+          { key: 'p1', label: 'P1（最快）', args: ['-preset', 'p1'] },
+          { key: 'p4', label: 'P4（均衡）', args: ['-preset', 'p4'] },
+          { key: 'p7', label: 'P7（最高质量）', args: ['-preset', 'p7'] }
+        ],
+        profiles: [
+          {
+            key: 'main',
+            label: 'Main（8-bit）',
+            args: ['-profile:v', 'main', '-pix_fmt', 'yuv420p'],
+            defaultPreset: 'p4',
+            defaultCrf: '28'
+          },
+          {
+            key: 'main10',
+            label: 'Main10（10-bit）',
+            args: ['-profile:v', 'main10', '-pix_fmt', 'p010le'],
+            defaultPreset: 'p4',
+            defaultCrf: '24'
+          }
+        ],
+        crfOptions: [
+          { key: '32', label: 'CQ 32（快速）', value: '32' },
+          { key: '28', label: 'CQ 28（均衡）', value: '28' },
+          { key: '24', label: 'CQ 24（高质量）', value: '24' }
+        ]
+      },
+      av1_qsv: {
+        label: 'Intel AV1（QSV，Arc GPU）',
+        requiresHardware: true,
+        ffmpegEncoder: 'av1_qsv',
+        baseArgs: ['-c:v', 'av1_qsv'],
+        qualityFlag: '-q',
+        presets: [
+          { key: 'speed', label: 'Speed（最快）', args: ['-preset', 'speed'] },
+          { key: 'balanced', label: 'Balanced（均衡）', args: ['-preset', 'balanced'] },
+          { key: 'quality', label: 'Quality（高质量）', args: ['-preset', 'quality'] }
+        ],
+        profiles: [
+          {
+            key: 'main',
+            label: 'Main（8-bit）',
+            args: ['-profile:v', 'main', '-pix_fmt', 'nv12'],
+            defaultPreset: 'balanced',
+            defaultCrf: '28'
+          },
+          {
+            key: 'main10',
+            label: 'Main10（10-bit）',
+            args: ['-profile:v', 'main10', '-pix_fmt', 'p010le'],
+            defaultPreset: 'balanced',
+            defaultCrf: '24'
+          }
+        ],
+        crfOptions: [
+          { key: '32', label: 'Q 32（快速）', value: '32' },
+          { key: '28', label: 'Q 28（均衡）', value: '28' },
+          { key: '24', label: 'Q 24（高质量）', value: '24' }
+        ]
+      },
+      av1_amf: {
+        label: 'AMD AV1（AMF，RX 7000 系）',
+        requiresHardware: true,
+        ffmpegEncoder: 'av1_amf',
+        baseArgs: ['-c:v', 'av1_amf'],
+        qualityFlag: '-qp',
+        presets: [
+          { key: 'speed', label: 'Speed（最快）', args: ['-quality', 'speed'] },
+          { key: 'balanced', label: 'Balanced（均衡）', args: ['-quality', 'balanced'] },
+          { key: 'quality', label: 'Quality（高质量）', args: ['-quality', 'quality'] }
+        ],
+        profiles: [
+          {
+            key: 'main',
+            label: 'Main（8-bit）',
+            args: ['-profile:v', 'main', '-pix_fmt', 'yuv420p'],
+            defaultPreset: 'balanced',
+            defaultCrf: '28'
+          },
+          {
+            key: 'main10',
+            label: 'Main10（10-bit）',
+            args: ['-profile:v', 'main10', '-pix_fmt', 'yuv420p10le'],
+            defaultPreset: 'balanced',
+            defaultCrf: '24'
+          }
+        ],
+        crfOptions: [
+          { key: '32', label: 'QP 32（快速）', value: '32' },
+          { key: '28', label: 'QP 28（均衡）', value: '28' },
+          { key: '24', label: 'QP 24（高质量）', value: '24' }
+        ]
       }
     }
   },
@@ -519,6 +618,32 @@ export const codecMatrix = {
           { key: '30', label: 'CRF 30（高质量）', value: '30' },
           { key: '28', label: 'CRF 28（极致质量）', value: '28' }
         ]
+      },
+      vp9_qsv: {
+        label: 'Intel VP9（QSV）',
+        requiresHardware: true,
+        ffmpegEncoder: 'vp9_qsv',
+        baseArgs: ['-c:v', 'vp9_qsv'],
+        qualityFlag: '-q',
+        presets: [
+          { key: 'speed', label: 'Speed（最快）', args: ['-preset', 'speed'] },
+          { key: 'balanced', label: 'Balanced（均衡）', args: ['-preset', 'balanced'] },
+          { key: 'quality', label: 'Quality（高质量）', args: ['-preset', 'quality'] }
+        ],
+        profiles: [
+          {
+            key: 'profile0',
+            label: 'Profile 0（8-bit）',
+            args: ['-profile:v', '0', '-pix_fmt', 'nv12'],
+            defaultPreset: 'balanced',
+            defaultCrf: '34'
+          }
+        ],
+        crfOptions: [
+          { key: '38', label: 'Q 38（最快）', value: '38' },
+          { key: '34', label: 'Q 34（均衡）', value: '34' },
+          { key: '30', label: 'Q 30（高质量）', value: '30' }
+        ]
       }
     }
   }
@@ -714,12 +839,14 @@ export function codecOptions(options = {}) {
     encoders: Object.entries(codec.encoders).map(([encoderKey, encoder]) => {
       const requiresHardware = Boolean(encoder.requiresHardware);
       const ffmpegName = encoder.ffmpegEncoder ?? encoderKey;
+      // 如果有 supportedEncoders 集合才进行硬件支持检测，否则显示所有编码器
       const isSupported = !requiresHardware
         || (supportedEncoders ? supportedEncoders.has(ffmpegName) : true);
       return {
         key: encoderKey,
         label: encoder.label,
-        disabled: !isSupported,
+        // 在有 supportedEncoders 的情况下才标记 disabled，否则全部可用
+        disabled: supportedEncoders ? !isSupported : false,
         profiles: (encoder.profiles ?? []).map((profile) => ({
           key: profile.key,
           label: profile.label,

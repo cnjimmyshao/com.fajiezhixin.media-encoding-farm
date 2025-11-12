@@ -39,6 +39,18 @@ block content
         label(class="radio-option")
           input(type="radio", name="qualityMode", value="bitrate")
           span 码率（恒定带宽）
+        label(class="radio-option")
+          input(type="radio", name="qualityMode", value="vmaf")
+          span VMAF（目标质量）
+
+    fieldset(id="vmafFieldset", class="hidden")
+      legend VMAF 目标
+      div(class="vmaf-range")
+        label(for="vmafMin") 最低值
+        input(type="number", id="vmafMin", name="vmafMin", min="0", max="100", step="0.1", placeholder="例如 85")
+        label(for="vmafMax") 最高值
+        input(type="number", id="vmafMax", name="vmafMax", min="0", max="100", step="0.1", placeholder="例如 95")
+      p(class="field-hint") 设置目标 VMAF 质量范围，系统将自动调整编码参数以达到目标质量。
 
     fieldset(id="crfFieldset")
       legend CRF 目标
@@ -59,14 +71,6 @@ block content
       div(id="presetOptions", class="radio-group")
         p(class="radio-placeholder") 请选择编码预设
 
-    fieldset
-      legend VMAF 目标
-      div(class="vmaf-range")
-        label(for="vmafMin") 最低值
-        input(type="number", id="vmafMin", name="vmafMin", min="0", max="100", step="0.1", placeholder="例如 90")
-        label(for="vmafMax") 最高值
-        input(type="number", id="vmafMax", name="vmafMax", min="0", max="100", step="0.1", placeholder="例如 95")
-      p(class="field-hint") 设置区间后系统会自动调整码率以靠近目标 VMAF（仅限码率模式）。
 
     fieldset
       legend 场景编码
@@ -81,9 +85,6 @@ block content
         p(class="field-hint") 值越小检测越敏感（0.01-1.0），默认 0.4。快速剪辑视频建议 0.2-0.3，慢节奏内容建议 0.5-0.6。
       
       p(class="field-hint") 开启后将先用 FFmpeg 场景检测切片，每个片段独立调节码率以满足目标 VMAF，再合并生成最终文件及 HLS/DASH。
-      label(for="sceneThresh") 场景检测阈值（0-1，建议 0.4）
-      input(type="number", id="sceneThresh", name="sceneThresh", step="0.01", min="0.01", max="1", value="0.4", disabled)
-      p(class="field-hint") 越大表示场景切换更敏感；仅在开启按场景编码时生效。
 
     fieldset
       legend 可选分析
@@ -91,9 +92,6 @@ block content
         input(type="checkbox", id="enableVmaf", name="enableVmaf")
         span 启用 VMAF 质量评估
       p(class="field-hint") 选择后将在任务完成后运行 VMAF 评估，可能增加额外耗时。
-      label(for="vmafTimeout") VMAF 超时时间（秒）
-      input(type="number", id="vmafTimeout", name="vmafTimeout", min="1", step="1", placeholder="例如 300")
-      p(class="field-hint") 为 VMAF 分析设置一个超时时间，防止进程卡死。
 
     button(type="submit") 提交任务
   p#form-message
@@ -111,6 +109,7 @@ block content
     const qualityModeContainer = document.getElementById('qualityModeOptions');
     const crfFieldset = document.getElementById('crfFieldset');
     const bitrateFieldset = document.getElementById('bitrateFieldset');
+    const vmafFieldset = document.getElementById('vmafFieldset');
     const bitrateInput = document.getElementById('bitrateKbps');
     const vmafMinInput = document.getElementById('vmafMin');
     const vmafMaxInput = document.getElementById('vmafMax');
@@ -119,7 +118,6 @@ block content
     const sceneThresholdInput = document.getElementById('sceneThreshold');
     const sceneThreshInput = document.getElementById('sceneThresh');
     const enableVmafInput = document.getElementById('enableVmaf');
-    const vmafTimeoutInput = document.getElementById('vmafTimeout');
     let currentQualityMode = 'crf';
     const codecOptionsData = JSON.parse(document.getElementById('codec-options-data').textContent);
     const codecMap = codecOptionsData.reduce((acc, codec) => {
@@ -377,9 +375,6 @@ block content
       if (vmafMaxInput) {
         vmafMaxInput.value = Number.isFinite(state.vmafMax) ? state.vmafMax : '';
       }
-      if (vmafTimeoutInput) {
-        vmafTimeoutInput.value = Number.isFinite(state.vmafTimeout) ? state.vmafTimeout : '';
-      }
     }
 
     codecOptionsContainer.addEventListener('change', (event) => {
@@ -547,20 +542,15 @@ block content
       const presetKey = `${codec}:${impl}:${profile}:${preset}:${crf || 'bitrate'}`;
       const perScene = perSceneInput?.checked ?? false;
       const sceneThreshold = perScene && sceneThresholdInput ? parseFloat(formData.get('sceneThreshold')) : null;
-      if (perScene && !hasVmafRange) {
-        message.textContent = '场景编码模式需要设置 VMAF 最低值与最高值';
-        return;
-      }
       if (perScene && sceneThreshold !== null && (sceneThreshold < 0.01 || sceneThreshold > 1)) {
         message.textContent = '场景检测灵敏度必须在 0.01-1.0 范围内';
         return;
       }
       const enableVmaf = formData.get('enableVmaf') === 'on' || hasVmafRange || perScene;
-      const vmafTimeout = parseInt(formData.get('vmafTimeout'), 10);
 
       const payload = {
-        inputPath: formData.get('inputPath'),
-        outputPath: formData.get('outputPath'),
+        inputPath: formData.get('inputPath')?.replace(/\\/g, '/'),
+        outputPath: formData.get('outputPath')?.replace(/\\/g, '/'),
         codec,
         impl,
         params: {
@@ -579,8 +569,8 @@ block content
         }
       };
       persistFormState({
-        inputPath: formData.get('inputPath') || '',
-        outputPath: formData.get('outputPath') || '',
+        inputPath: (formData.get('inputPath') || '').replace(/\\/g, '/'),
+        outputPath: (formData.get('outputPath') || '').replace(/\\/g, '/'),
         codec,
         impl,
         profile,
@@ -593,8 +583,7 @@ block content
         vmafMin: isVmafMode ? vmafMin : null,
         vmafMax: isVmafMode ? vmafMax : null,
         perScene,
-        sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null,
-        vmafTimeout: Number.isFinite(vmafTimeout) ? vmafTimeout : null
+        sceneThreshold: perScene && Number.isFinite(sceneThreshold) ? sceneThreshold : null
       });
       const res = await fetch('/api/jobs', {
         method: 'POST',
