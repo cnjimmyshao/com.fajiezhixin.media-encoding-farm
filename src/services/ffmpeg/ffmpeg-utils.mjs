@@ -103,8 +103,9 @@ async function collectMetrics(
         config.ffmpeg.bin,
         outputPath,
         referencePath,
-        config,
-        0
+        {
+          vmaf: config.vmaf,
+        }
       );
       metrics.vmafScore = Number(vmafStats.mean.toFixed(3));
       metrics.vmafMax = Number(vmafStats.max.toFixed(3));

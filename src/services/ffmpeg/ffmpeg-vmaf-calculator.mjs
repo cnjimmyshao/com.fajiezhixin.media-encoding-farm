@@ -7,22 +7,50 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { stat } from 'node:fs/promises';
 
+function toPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const rounded = Math.round(parsed);
+  return rounded > 0 ? rounded : fallback;
+}
+
+function buildVmafFilterArgs(logPath, vmafOptions = {}) {
+  const modelVersion =
+    vmafOptions.modelVersion ?? vmafOptions.model ?? "vmaf_v0.6.1";
+  const modelArg = modelVersion.includes("/")
+    ? modelVersion
+    : `version=${modelVersion}`;
+  const nThreads = toPositiveInteger(vmafOptions.nThreads ?? vmafOptions.n_threads, 4);
+  const nSubsample = toPositiveInteger(
+    vmafOptions.nSubsample ?? vmafOptions.n_subsample,
+    1
+  );
+  const parts = [
+    `model='${modelArg}'`,
+    `n_threads=${nThreads}`,
+    `n_subsample=${nSubsample}`,
+    "log_fmt=json",
+    `log_path=${logPath}`,
+  ];
+  const fps = vmafOptions.fps;
+  if (typeof fps === "number" && Number.isFinite(fps) && fps > 0) {
+    parts.splice(3, 0, `fps=${fps}`);
+  }
+  return parts.join(":");
+}
+
 async function computeVmafScore(
   ffmpegBin,
   distortedPath,
   referencePath,
   options = {}
 ) {
-  const { reportPath } = options;
+  const { reportPath, vmaf: vmafOptions } = options;
   const logPath = reportPath || `${distortedPath}.vmaf.json`;
 
-  // 使用简化的VMAF参数
-  const modelVersion = 'vmaf_v0.6.1';
-  const nThreads = 4;
-  const nSubsample = 1;
-
+  const filterArgs = buildVmafFilterArgs(logPath, vmafOptions);
   // 添加分辨率缩放以确保两个输入分辨率匹配
-  const filterGraph = `[0:v]setpts=PTS-STARTPTS[dist_main];[1:v]setpts=PTS-STARTPTS[ref_in];[ref_in][dist_main]scale2ref=flags=bicubic[ref_scaled][dist_scaled];[dist_scaled][ref_scaled]libvmaf=model='version=${modelVersion}':n_threads=${nThreads}:n_subsample=${nSubsample}:log_fmt=json:log_path=${logPath}`;
+  const filterGraph = `[0:v]setpts=PTS-STARTPTS[dist_main];[1:v]setpts=PTS-STARTPTS[ref_in];[ref_in][dist_main]scale2ref=flags=bicubic[ref_scaled][dist_scaled];[dist_scaled][ref_scaled]libvmaf=${filterArgs}`;
 
   const args = [
     "-loglevel",

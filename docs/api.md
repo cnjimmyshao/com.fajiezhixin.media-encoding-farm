@@ -23,43 +23,63 @@
   "inputPath": "/path/to/input.mp4",
   "outputPath": "/path/to/output.mp4",
   "codec": "h264",
-  "impl": "ffmpeg",
+  "impl": "x264",
   "params": {
+    "presetKey": "h264:x264:main:medium:23",
+    "profile": "main",
+    "preset": "medium",
     "qualityMode": "crf",
     "crf": 23,
+    "bitrateKbps": null,
     "scale": "source",
-    "perScene": false,
-    "sceneThreshold": 0.4,
     "enableVmaf": false,
-    "vmafMin": 85,
-    "vmafMax": 95
+    "perScene": false,
+    "sceneThreshold": null,
+    "vmafMin": null,
+    "vmafMax": null
   }
 }
 ```
+
+> ℹ️ **提示**：创建任务时，系统会自动将 `outputPath` 改写为 `文件名[任务ID].扩展名`，避免多个任务写入相同文件。
 
 **参数说明：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `inputPath` | string | 是 | 输入文件路径（本地或 HTTP URL） |
-| `outputPath` | string | 是 | 输出文件路径 |
-| `codec` | string | 是 | 编码器：`h264`, `h265`, `av1`, `vp9` |
-| `impl` | string | 是 | 实现方式：`ffmpeg`, `nvenc` |
-| `params` | object | 否 | 编码参数 |
+| `inputPath` | string | 是 | 输入文件路径（本地或 HTTP/HTTPS URL） |
+| `outputPath` | string | 是 | 输出文件路径（保存时会自动追加任务 ID） |
+| `codec` | string | 是 | 编码格式：`h264`, `hevc`, `av1`, `vp9` |
+| `impl` | string | 是 | 具体编码实现，需与 `codec` 匹配（见下方矩阵） |
+| `params` | object | 否 | 编码参数对象 |
 
 **params 详细说明：**
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `qualityMode` | string | `"crf"` | 质量模式：`crf` 或 `bitrate` |
-| `crf` | number | `23` | CRF 值（0-51，越小质量越好） |
-| `bitrateKbps` | number | - | 目标码率（Kbps，qualityMode=bitrate 时必填） |
-| `scale` | string | `"source"` | 分辨率：`source`, `720p`, `1080p`, `4k` |
-| `perScene` | boolean | `false` | 是否启用场景编码 |
-| `sceneThreshold` | number | `0.4` | 场景检测阈值（0.01-1.0） |
-| `enableVmaf` | boolean | `false` | 是否启用 VMAF 调优 |
-| `vmafMin` | number | - | VMAF 最低目标分数（0-100） |
-| `vmafMax` | number | - | VMAF 最高目标分数（0-100） |
+| `presetKey` | string | - | 预设缓存键，格式 `codec:impl:profile:preset:crf|bitrate` |
+| `profile` | string | 依编码器 | 编码 Profile，例如 `baseline`/`main`/`high`（H.264）、`main`/`main10`（HEVC） |
+| `preset` | string | 依编码器 | 编码速度预设（如 `medium`、`p4`、`speed` 等） |
+| `qualityMode` | string | `"crf"` | 质量模式：`crf`、`bitrate`、`vmaf` |
+| `crf` | number | `23` | CRF 值（0-51，`qualityMode=crf` 时必填） |
+| `bitrateKbps` | number | - | 目标码率（Kbps，`qualityMode=bitrate` 时必填） |
+| `scale` | string | `"source"` | 分辨率：`source`, `360p`, `480p`, `720p`, `1080p`, `4k` |
+| `enableVmaf` | boolean | `false` | 是否在编码完成后计算 VMAF 指标 |
+| `vmafMin` | number | - | VMAF 最低目标分数（0-100，`qualityMode=vmaf` 或 `perScene=true` 时必填） |
+| `vmafMax` | number | - | VMAF 最高目标分数（0-100，`qualityMode=vmaf` 或 `perScene=true` 时必填） |
+| `perScene` | boolean | `false` | 是否启用场景切片编码（必须搭配有效的 `vmafMin/vmafMax`） |
+| `sceneThreshold` | number | `0.4` | 场景检测阈值（0.01-1.0，`perScene=true` 时必填） |
+
+**实现（impl）支持矩阵：**
+
+| 编码格式 | CPU | NVIDIA NVENC | Intel QSV | AMD AMF | Apple VideoToolbox |
+|-----------|-----|--------------|-----------|---------|--------------------|
+| `h264` | `x264` | `h264_nvenc` | `h264_qsv` | `h264_amf` | `h264_videotoolbox` |
+| `hevc` | `x265` | `hevc_nvenc` | `hevc_qsv` | `hevc_amf` | `hevc_videotoolbox` |
+| `av1` | `svt-av1` | `av1_nvenc` | `av1_qsv` | `av1_amf` | - |
+| `vp9` | `libvpx-vp9` | - | `vp9_qsv` | - | - |
+
+如果所选实现与硬件能力不匹配，API 将返回错误；通过 Web 表单创建时会根据检测结果灰显不可用选项。
 
 **响应：**
 
@@ -67,10 +87,13 @@
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "input_path": "/path/to/input.mp4",
-  "output_path": "/path/to/output-550e8400-e29b-41d4-a716-446655440000.mp4",
+  "output_path": "/path/to/output[550e8400-e29b-41d4-a716-446655440000].mp4",
   "codec": "h264",
-  "impl": "ffmpeg",
+  "impl": "x264",
   "params": {
+    "presetKey": "h264:x264:main:medium:23",
+    "profile": "main",
+    "preset": "medium",
     "qualityMode": "crf",
     "crf": 23,
     "scale": "source"
@@ -107,7 +130,7 @@
     {
       "id": "550e8400-e29b-41d4-a716-446655440000",
       "input_path": "/path/to/input.mp4",
-      "output_path": "/path/to/output.mp4",
+      "output_path": "/path/to/output[550e8400-e29b-41d4-a716-446655440000].mp4",
       "codec": "h264",
       "status": "success",
       "progress": 100,
@@ -141,8 +164,11 @@
   "input_path": "/path/to/input.mp4",
   "output_path": "/path/to/output.mp4",
   "codec": "h264",
-  "impl": "ffmpeg",
+  "impl": "x264",
   "params": {
+    "presetKey": "h264:x264:main:medium:23",
+    "profile": "main",
+    "preset": "medium",
     "qualityMode": "crf",
     "crf": 23,
     "scale": "source",
@@ -323,8 +349,11 @@ curl -X POST http://localhost:3000/api/jobs \
     "inputPath": "/media/input.mp4",
     "outputPath": "/media/output-crf.mp4",
     "codec": "h264",
-    "impl": "ffmpeg",
+    "impl": "x264",
     "params": {
+      "presetKey": "h264:x264:main:medium:23",
+      "profile": "main",
+      "preset": "medium",
       "qualityMode": "crf",
       "crf": 23,
       "scale": "source"
@@ -340,9 +369,12 @@ curl -X POST http://localhost:3000/api/jobs \
   -d '{
     "inputPath": "/media/input.mp4",
     "outputPath": "/media/output-bitrate.mp4",
-    "codec": "h265",
-    "impl": "ffmpeg",
+    "codec": "hevc",
+    "impl": "x265",
     "params": {
+      "presetKey": "hevc:x265:main:slow:bitrate",
+      "profile": "main",
+      "preset": "slow",
       "qualityMode": "bitrate",
       "bitrateKbps": 2500,
       "scale": "1080p"
@@ -359,8 +391,11 @@ curl -X POST http://localhost:3000/api/jobs \
     "inputPath": "/media/input.mp4",
     "outputPath": "/media/output-vmaf.mp4",
     "codec": "av1",
-    "impl": "ffmpeg",
+    "impl": "svt-av1",
     "params": {
+      "presetKey": "av1:svt-av1:baseline:speed-6:bitrate",
+      "profile": "baseline",
+      "preset": "speed-6",
       "qualityMode": "bitrate",
       "bitrateKbps": 2000,
       "enableVmaf": true,
@@ -379,8 +414,11 @@ curl -X POST http://localhost:3000/api/jobs \
     "inputPath": "/media/input.mp4",
     "outputPath": "/media/output-scenes.mp4",
     "codec": "h264",
-    "impl": "ffmpeg",
+    "impl": "x264",
     "params": {
+      "presetKey": "h264:x264:main:medium:bitrate",
+      "profile": "main",
+      "preset": "medium",
       "qualityMode": "bitrate",
       "bitrateKbps": 3000,
       "perScene": true,

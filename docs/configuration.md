@@ -59,6 +59,12 @@
     bin: "ffmpeg",              // FFmpeg 路径
     ffprobe: "ffprobe",         // FFprobe 路径
     timeoutFactor: 5,           // 超时系数
+    vmaf: {
+      model: "vmaf_v0.6.1",     // 传递给 libvmaf 的模型标识
+      n_threads: 4,              // VMAF 计算线程数
+      n_subsample: 5,            // VMAF 子采样率
+      fps: null                  // 可选的帧率限制
+    }
   }
 }
 ```
@@ -68,15 +74,16 @@
 - `FFPROBE_BIN` - 覆盖 `ffmpeg.ffprobe`
 - `FFMPEG_TIMEOUT_FACTOR` - 覆盖 `ffmpeg.timeoutFactor`
 
+> VMAF 相关的 CLI 参数会在运行时根据下方 `vmaf` 配置块自动同步至 `ffmpeg.vmaf`，无需单独配置。
+
 ### VMAF 配置 (`vmaf`)
 
 VMAF（Video Multimethod Assessment Fusion）是 Netflix 开发的开源视频质量评估算法。
 
 ```javascript
-{
+{ 
   vmaf: {
     modelVersion: "vmaf_v0.6.1",      // VMAF 模型版本
-    maxTuningAttempts: 8,             // 最大调优尝试次数
     minBitrateKbps: 200,              // 最小码率（Kbps）
     maxBitrateKbps: 80000,            // 最大码率（Kbps）
     bitrateIncreaseFactor: 1.15,      // 码率增加因子
@@ -88,10 +95,12 @@ VMAF（Video Multimethod Assessment Fusion）是 Netflix 开发的开源视频�
 ```
 
 **环境变量：**
-- `VMAF_MODEL` - 覆盖 `vmaf.modelVersion`
-- `VMAF_N_THREADS` - 覆盖 `vmaf.nThreads`
-- `VMAF_N_SUBSAMPLE` - 覆盖 `vmaf.nSubsample`
-- `VMAF_FPS` - 覆盖 `vmaf.fps`
+- `VMAF_MODEL` - 覆盖 `vmaf.modelVersion`（同时更新 `ffmpeg.vmaf.model`）
+- `VMAF_N_THREADS` - 覆盖 `vmaf.nThreads`（同时更新 `ffmpeg.vmaf.n_threads`）
+- `VMAF_N_SUBSAMPLE` - 覆盖 `vmaf.nSubsample`（同时更新 `ffmpeg.vmaf.n_subsample`）
+- `VMAF_FPS` - 覆盖 `vmaf.fps`（设置为正数会同步到 `ffmpeg.vmaf.fps`，留空则清除限制）
+
+> 调优过程中不再设置最大尝试次数限制，系统会在 `minBitrateKbps` 与 `maxBitrateKbps` 的约束内持续迭代，直到 VMAF 达到目标范围或无法再调整码率。
 
 **VMAF 模型版本说明：**
 
@@ -185,7 +194,6 @@ ABR（Average Bitrate）是 CBR 和 CRF 的折中方案，适合媒体存储和�
 export default {
   vmaf: {
     modelVersion: "vmaf_v0.6.1",
-    maxTuningAttempts: 10,
     nThreads: 8,
     nSubsample: 3,
   },
@@ -205,7 +213,6 @@ export default {
 // config/production-fast.mjs
 export default {
   vmaf: {
-    maxTuningAttempts: 3,
     nThreads: 2,
     nSubsample: 10,  // 更多子采样，更快但精度稍低
   },
@@ -226,7 +233,6 @@ export default {
 export default {
   vmaf: {
     modelVersion: "vmaf_4k_v0.6.1",  // 4K 专用模型
-    maxTuningAttempts: 8,
     nThreads: 16,                    // 更多线程
     nSubsample: 5,
   },
