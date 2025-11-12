@@ -57,8 +57,11 @@ curl -X POST http://localhost:3000/api/jobs \
     "inputPath": "/path/to/sample.mp4",
     "outputPath": "/path/to/output.mp4",
     "codec": "h264",
-    "impl": "ffmpeg",
+    "impl": "x264",
     "params": {
+      "presetKey": "h264:x264:main:medium:23",
+      "profile": "main",
+      "preset": "medium",
       "qualityMode": "crf",
       "crf": 23,
       "scale": "source"
@@ -169,22 +172,63 @@ FFMPEG_TIMEOUT_FACTOR=5
   "inputPath": "/path/to/input.mp4",
   "outputPath": "/path/to/output.mp4",
   "codec": "h264|hevc|av1|vp9",
-  "impl": "x264|x265|libvpx-vp9|svt-av1|h264_nvenc|hevc_nvenc|av1_nvenc",
+  "impl": "见下方支持矩阵",
   "params": {
-    "qualityMode": "crf|bitrate|vmaf",
+    "presetKey": "h264:x264:main:medium:23",
+    "profile": "main",
+    "preset": "medium",
+    "qualityMode": "crf",
     "crf": 23,
-    "bitrateKbps": 2000,
-    "scale": "source|360p|480p|720p|1080p",
-    "profile": "baseline|main|high",
-    "preset": "medium|fast|ultrafast",
+    "bitrateKbps": null,
+    "scale": "source",
+    "enableVmaf": false,
     "perScene": false,
-    "sceneThreshold": 0.4,
-    "enableVmaf": true,
-    "vmafMin": 85,
-    "vmafMax": 95
+    "sceneThreshold": null,
+    "vmafMin": null,
+    "vmafMax": null
   }
 }
 ```
+
+> ℹ️ **注意**：后端会在保存任务时将输出文件名改写为 `文件名[任务ID].扩展名`，以避免并发任务写入同一路径。
+
+**字段说明：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `inputPath` | string | ✅ | 输入文件路径，可为本地绝对路径或 HTTP/HTTPS URL |
+| `outputPath` | string | ✅ | 期望输出路径（保存时会自动追加任务 ID） |
+| `codec` | string | ✅ | 编码格式：`h264` / `hevc` / `av1` / `vp9` |
+| `impl` | string | ✅ | 具体编码实现，需与 `codec` 匹配（见下方矩阵） |
+| `params` | object | ➖ | 编码参数对象 |
+
+**`params` 字段说明：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `presetKey` | string | - | 预设缓存键，格式 `codec:impl:profile:preset:crf|bitrate`，用于命中历史配置 |
+| `profile` | string | 依编码器 | 编码 Profile，例如 H.264: `baseline`/`main`/`high`，HEVC: `main`/`main10` |
+| `preset` | string | 依编码器 | 编码速度预设（如 `medium`、`p4`、`speed` 等） |
+| `qualityMode` | string | `"crf"` | 质量模式：`crf`、`bitrate`、`vmaf` |
+| `crf` | number | `23` | CRF 值（0-51，`qualityMode=crf` 时必填） |
+| `bitrateKbps` | number | - | 目标码率（Kbps，`qualityMode=bitrate` 时必填） |
+| `scale` | string | `"source"` | 输出分辨率：`source`, `360p`, `480p`, `720p`, `1080p`, `4k` |
+| `enableVmaf` | boolean | `false` | 是否在编码完成后计算 VMAF 指标 |
+| `vmafMin` | number | - | VMAF 最低目标分数（0-100，`qualityMode=vmaf` 或 `perScene=true` 时必填） |
+| `vmafMax` | number | - | VMAF 最高目标分数（0-100，`qualityMode=vmaf` 或 `perScene=true` 时必填） |
+| `perScene` | boolean | `false` | 是否启用场景切片编码（需要提供有效的 `vmafMin/vmafMax`） |
+| `sceneThreshold` | number | `0.4` | 场景检测灵敏度（0.01-1.0，`perScene=true` 时必填） |
+
+**实现（impl）支持矩阵：**
+
+| 编码格式 | CPU | NVIDIA NVENC | Intel QSV | AMD AMF | Apple VideoToolbox |
+|-----------|-----|--------------|-----------|---------|--------------------|
+| `h264` | `x264` | `h264_nvenc` | `h264_qsv` | `h264_amf` | `h264_videotoolbox` |
+| `hevc` | `x265` | `hevc_nvenc` | `hevc_qsv` | `hevc_amf` | `hevc_videotoolbox` |
+| `av1` | `svt-av1` | `av1_nvenc` | `av1_qsv` | `av1_amf` | - |
+| `vp9` | `libvpx-vp9` | - | `vp9_qsv` | - | - |
+
+前端会根据 `hardware-capabilities` 的检测结果禁用本机不可用的实现，直接调用 API 时需要手动保证组合有效。
 
 **响应：**
 ```json

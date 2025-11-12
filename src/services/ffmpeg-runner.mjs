@@ -252,6 +252,7 @@ async function runPerSceneJob(job, durationSec, config) {
           job.input_path,
           {
             reportPath: finalReportPath,
+            vmaf: config.vmaf,
           }
         );
         console.log(`[场景编码] 最终 VMAF 计算完成:`, finalVmafStats);
@@ -311,12 +312,11 @@ async function runJob(job, durationSec, config) {
     qualityMode === "bitrate" ? parseVmafTargets(job.params) : null;
   const adaptiveVmaf = Boolean(vmafTargets && currentBitrate);
   const enableVmaf = Boolean(job.params?.enableVmaf || adaptiveVmaf);
-  const maxAttempts = adaptiveVmaf ? config.vmaf.maxTuningAttempts : 1;
   const history = [];
   let attempt = 0;
   let lastMetrics = null;
 
-  while (attempt < maxAttempts) {
+  while (true) {
     attempt += 1;
     const qualityOverride =
       qualityMode === "bitrate"

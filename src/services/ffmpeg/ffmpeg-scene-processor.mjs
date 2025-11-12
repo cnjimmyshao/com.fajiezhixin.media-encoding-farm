@@ -97,7 +97,7 @@ async function encodeSceneSegment(job, durationSec, config, options) {
   let bitrate = initialBitrate;
   const history = [];
 
-  while (attempt < config.vmaf.maxTuningAttempts) {
+  while (true) {
     attempt += 1;
     const qualityOverride =
       qualityMode === "bitrate" && bitrate
@@ -161,10 +161,6 @@ async function encodeSceneSegment(job, durationSec, config, options) {
     }
     bitrate = nextBitrate;
   }
-  return {
-    success: false,
-    error: `场景 ${scene.index} 达到最大尝试次数仍未满足 VMAF 范围`,
-  };
 }
 
 async function concatSceneSegments(ffmpegBin, files, outputPath) {

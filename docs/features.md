@@ -23,7 +23,7 @@ VMAF（Video Multimethod Assessment Fusion）是 Netflix 开发的开源视频�
 1. **初始编码**：使用初始参数进行编码
 2. **VMAF 计算**：计算输出视频的 VMAF 分数
 3. **参数调整**：根据 VMAF 与目标范围的差距调整码率或 CRF
-4. **迭代优化**：重复步骤 1-3，直到 VMAF 达到目标范围或达到最大尝试次数
+4. **迭代优化**：重复步骤 1-3，直到 VMAF 达到目标范围或无法进一步提升
 
 ### 使用场景
 
@@ -52,8 +52,8 @@ VMAF（Video Multimethod Assessment Fusion）是 Netflix 开发的开源视频�
 - VMAF > vmafMax：减少码率（乘以 `bitrateDecreaseFactor`，默认 0.9）
 - vmafMin ≤ VMAF ≤ vmafMax：达到目标，停止调优
 
-**调优限制：**
-- 最大尝试次数：`maxTuningAttempts`（默认 8 次）
+**调优边界：**
+- 系统会持续迭代，直到 VMAF 落入目标区间或码率触及边界
 - 最小码率：`minBitrateKbps`（默认 200）
 - 最大码率：`maxBitrateKbps`（默认 80000）
 
@@ -200,8 +200,8 @@ CUDA_DEVICE=0
 
 ### 支持的 GPU 和编码器
 
-| GPU 系列 | H.264 | H.265 | AV1 |
-|----------|-------|-------|-----|
+| GPU 系列 | H.264 | HEVC (H.265) | AV1 |
+|----------|-------|--------------|-----|
 | Maxwell (9xx) | ✅ | ❌ | ❌ |
 | Pascal (10xx) | ✅ | ✅ | ❌ |
 | Turing (16xx, 20xx) | ✅ | ✅ | ❌ |
@@ -225,10 +225,13 @@ CUDA_DEVICE=0
 ```json
 {
   "inputPath": "/media/input.mp4",
-  "outputPath": "/media/output-h265.mp4",
-  "codec": "h265",
-  "impl": "nvenc",
+  "outputPath": "/media/output-hevc.mp4",
+  "codec": "hevc",
+  "impl": "hevc_nvenc",
   "params": {
+    "profile": "main",
+    "preset": "p4",
+    "presetKey": "hevc:hevc_nvenc:main:p4:bitrate",
     "qualityMode": "bitrate",
     "bitrateKbps": 2500,
     "scale": "source"
@@ -357,17 +360,29 @@ H.264 > H.265 > VP9 > AV1
 ```json
 {
   "codec": "h264",
-  "impl": "ffmpeg",
-  "params": { "crf": 23 }
+  "impl": "x264",
+  "params": {
+    "profile": "main",
+    "preset": "medium",
+    "presetKey": "h264:x264:main:medium:23",
+    "qualityMode": "crf",
+    "crf": 23
+  }
 }
 ```
 
 **H.265（高压缩）：**
 ```json
 {
-  "codec": "h265",
-  "impl": "ffmpeg",
-  "params": { "crf": 28 }
+  "codec": "hevc",
+  "impl": "x265",
+  "params": {
+    "profile": "main",
+    "preset": "slow",
+    "presetKey": "hevc:x265:main:slow:28",
+    "qualityMode": "crf",
+    "crf": 28
+  }
 }
 ```
 
@@ -375,36 +390,48 @@ H.264 > H.265 > VP9 > AV1
 ```json
 {
   "codec": "av1",
-  "impl": "ffmpeg",
-  "params": { "crf": 32 }
+  "impl": "svt-av1",
+  "params": {
+    "profile": "baseline",
+    "preset": "speed-6",
+    "presetKey": "av1:svt-av1:baseline:speed-6:32",
+    "qualityMode": "crf",
+    "crf": 32
+  }
 }
 ```
 
 **NVENC H.265（快速）：**
 ```json
 {
-  "codec": "h265",
-  "impl": "nvenc",
-  "params": { "bitrateKbps": 2500 }
+  "codec": "hevc",
+  "impl": "hevc_nvenc",
+  "params": {
+    "profile": "main",
+    "preset": "p4",
+    "presetKey": "hevc:hevc_nvenc:main:p4:bitrate",
+    "qualityMode": "bitrate",
+    "bitrateKbps": 2500
+  }
 }
 ```
 
 ### 选择建议
 
 **按用途：**
-- **流媒体**：H.264（兼容性）或 H.265（节省带宽）
-- **存档**：H.265 或 AV1（压缩率）
+- **流媒体**：H.264（兼容性）或 HEVC（节省带宽）
+- **存档**：HEVC 或 AV1（压缩率）
 - **Web**：H.264 或 VP9
 - **快速处理**：NVENC
 
 **按分辨率：**
 - **1080p 及以下**：H.264
-- **4K**：H.265
+- **4K**：HEVC
 - **高压缩需求**：AV1
 
 **按设备：**
 - **移动设备**：H.264（兼容性）
-- **现代设备**：H.265
+- **现代设备**：HEVC
 - **浏览器**：H.264、VP9
 
 ## 流媒体输出
@@ -440,9 +467,18 @@ DASH 是国际标准，基于 MPEG 的自适应流媒体协议。
 {
   "outputPath": "/media/output.m3u8",
   "codec": "h264",
+  "impl": "x264",
   "params": {
+    "presetKey": "h264:x264:main:medium:bitrate",
+    "profile": "main",
+    "preset": "medium",
     "qualityMode": "bitrate",
-    "bitrateKbps": 2500
+    "bitrateKbps": 2500,
+    "perScene": true,
+    "sceneThreshold": 0.4,
+    "enableVmaf": true,
+    "vmafMin": 85,
+    "vmafMax": 95
   }
 }
 ```
@@ -451,28 +487,24 @@ DASH 是国际标准，基于 MPEG 的自适应流媒体协议。
 ```json
 {
   "outputPath": "/media/output.mpd",
-  "codec": "h265",
+  "codec": "hevc",
+  "impl": "x265",
   "params": {
+    "presetKey": "hevc:x265:main:slow:bitrate",
+    "profile": "main",
+    "preset": "slow",
     "qualityMode": "bitrate",
-    "bitrateKbps": 3000
+    "bitrateKbps": 3000,
+    "perScene": true,
+    "sceneThreshold": 0.35,
+    "enableVmaf": true,
+    "vmafMin": 85,
+    "vmafMax": 95
   }
 }
 ```
 
-### 自适应码率
-
-生成多码率版本：
-
-```json
-{
-  "outputPath": "/media/output.m3u8",
-  "codec": "h264",
-  "params": {
-    "qualityMode": "bitrate",
-    "bitrates": [1000, 2500, 5000]  // 多个码率
-  }
-}
-```
+> 当前版本会为每个场景编码生成一套 HLS/DASH 切片，用于回放与分析；多码率自适应输出仍在规划中。
 
 ### 最佳实践
 

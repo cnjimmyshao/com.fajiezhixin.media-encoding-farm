@@ -2,8 +2,11 @@
   "inputPath": "/media/sample.mp4",
   "outputPath": "/media/output-crf.mp4",
   "codec": "h264",
-  "impl": "ffmpeg",
+  "impl": "x264",
   "params": {
+    "presetKey": "h264:x264:main:medium:23",
+    "profile": "main",
+    "preset": "medium",
     "qualityMode": "crf",
     "crf": 23,
     "scale": "source"

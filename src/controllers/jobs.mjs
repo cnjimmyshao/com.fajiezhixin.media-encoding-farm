@@ -50,14 +50,13 @@ export async function createJob(payload) {
   const now = new Date().toISOString();
   const paramsJson = payload.params ? JSON.stringify(payload.params) : null;
 
-  const { outputPath = normalize(outputPath) } = payload;
-  // console.log('Normalized outputPath:', outputPath);
-  const dir = dirname(outputPath);
-  const ext = extname(outputPath);
-  const name = basename(outputPath, ext);
-  // const newOutputPath = join(dir, `${name}-${id}${ext}`);
-  const newOutputPath = join(dir, `${name}[${id}].${ext}`);
-  // console.log('Generated newOutputPath:', newOutputPath);
+  const normalizedOutputPath = payload.outputPath
+    ? normalize(payload.outputPath)
+    : payload.outputPath;
+  const dir = dirname(normalizedOutputPath);
+  const ext = extname(normalizedOutputPath);
+  const name = basename(normalizedOutputPath, ext);
+  const newOutputPath = join(dir, `${name}[${id}]${ext}`);
 
   await db.run(
     `INSERT INTO jobs (id, input_path, output_path, codec, impl, params_json, status, progress, created_at, updated_at)

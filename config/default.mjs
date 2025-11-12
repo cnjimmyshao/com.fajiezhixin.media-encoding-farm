@@ -2,6 +2,17 @@
  * @file 默认配置
  * @description 提供服务器、路径与 ffmpeg 相关默认常量
  */
+const vmafDefaults = {
+  modelVersion: "vmaf_v0.6.1",
+  minBitrateKbps: 200,
+  maxBitrateKbps: 80000,
+  bitrateIncreaseFactor: 1.15,
+  bitrateDecreaseFactor: 0.9,
+  nThreads: 4,
+  nSubsample: 5,
+  fps: null,
+};
+
 export const defaultConfig = {
   server: {
     port: 3000,
@@ -16,17 +27,14 @@ export const defaultConfig = {
     bin: "ffmpeg",
     ffprobe: "ffprobe",
     timeoutFactor: 5,
+    vmaf: {
+      model: vmafDefaults.modelVersion,
+      n_threads: vmafDefaults.nThreads,
+      n_subsample: vmafDefaults.nSubsample,
+      fps: vmafDefaults.fps,
+    },
   },
-  vmaf: {
-    modelVersion: "vmaf_v0.6.1",
-    maxTuningAttempts: 8,
-    minBitrateKbps: 200,
-    maxBitrateKbps: 80000,
-    bitrateIncreaseFactor: 1.15,
-    bitrateDecreaseFactor: 0.9,
-    nThreads: 4,
-    nSubsample: 5,
-  },
+  vmaf: { ...vmafDefaults },
   sceneDetection: {
     threshold: 0.4, // 场景检测阈值 (0.01-1.0)，值越小越敏感
   },

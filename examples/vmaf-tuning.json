@@ -1,9 +1,12 @@
 {
   "inputPath": "/media/sample.mp4",
   "outputPath": "/media/output-vmaf.mp4",
-  "codec": "h265",
-  "impl": "ffmpeg",
+  "codec": "hevc",
+  "impl": "x265",
   "params": {
+    "presetKey": "hevc:x265:main:slow:bitrate",
+    "profile": "main",
+    "preset": "slow",
     "qualityMode": "bitrate",
     "bitrateKbps": 2000,
     "scale": "1080p",

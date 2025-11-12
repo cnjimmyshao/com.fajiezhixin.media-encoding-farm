@@ -21,6 +21,30 @@ const __dirname = dirname(__filename);
  * @description 合并环境变量配置
  * @returns {object} 配置对象
  */
+function normalizePositiveInteger(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  const rounded = Math.round(num);
+  return rounded > 0 ? rounded : null;
+}
+
+function syncVmafCliConfig(config) {
+  if (!config.ffmpeg.vmaf) {
+    config.ffmpeg.vmaf = {};
+  }
+  const vmaf = config.vmaf ?? {};
+  config.ffmpeg.vmaf.model = vmaf.modelVersion ?? config.ffmpeg.vmaf.model;
+  config.ffmpeg.vmaf.n_threads =
+    normalizePositiveInteger(vmaf.nThreads) ?? config.ffmpeg.vmaf.n_threads;
+  config.ffmpeg.vmaf.n_subsample =
+    normalizePositiveInteger(vmaf.nSubsample) ?? config.ffmpeg.vmaf.n_subsample;
+  if (typeof vmaf.fps === "number" && Number.isFinite(vmaf.fps) && vmaf.fps > 0) {
+    config.ffmpeg.vmaf.fps = vmaf.fps;
+  } else {
+    delete config.ffmpeg.vmaf.fps;
+  }
+}
+
 function buildConfig() {
   const config = JSON.parse(JSON.stringify(defaultConfig));
   if (process.env.PORT) config.server.port = Number(process.env.PORT);
@@ -29,17 +53,32 @@ function buildConfig() {
   if (process.env.FFMPEG_BIN) config.ffmpeg.bin = process.env.FFMPEG_BIN;
   if (process.env.FFPROBE_BIN) config.ffmpeg.ffprobe = process.env.FFPROBE_BIN;
   if (process.env.VMAF_MODEL) {
-    config.ffmpeg.vmaf.model = process.env.VMAF_MODEL;
+    config.vmaf.modelVersion = process.env.VMAF_MODEL;
   }
   if (process.env.VMAF_N_THREADS) {
-    config.ffmpeg.vmaf.n_threads = Number(process.env.VMAF_N_THREADS);
+    const parsed = normalizePositiveInteger(process.env.VMAF_N_THREADS);
+    if (parsed) {
+      config.vmaf.nThreads = parsed;
+    }
   }
   if (process.env.VMAF_N_SUBSAMPLE) {
-    config.ffmpeg.vmaf.n_subsample = Number(process.env.VMAF_N_SUBSAMPLE);
+    const parsed = normalizePositiveInteger(process.env.VMAF_N_SUBSAMPLE);
+    if (parsed) {
+      config.vmaf.nSubsample = parsed;
+    }
   }
-  if (process.env.VMAF_FPS) {
-    config.ffmpeg.vmaf.fps = Number(process.env.VMAF_FPS);
+  if (Object.prototype.hasOwnProperty.call(process.env, "VMAF_FPS")) {
+    const raw = process.env.VMAF_FPS;
+    if (raw === "" || raw === undefined) {
+      config.vmaf.fps = null;
+    } else {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        config.vmaf.fps = parsed;
+      }
+    }
   }
+  syncVmafCliConfig(config);
   return config;
 }
 

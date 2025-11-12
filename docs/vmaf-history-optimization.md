@@ -133,9 +133,8 @@ async function runPerSceneJobWithHistory(job, config) {
         // 4. 第一次编码使用推荐的码率
         let currentBitrate = recommendedBitrate;
         let attempt = 0;
-        const maxAttempts = config.vmaf.maxTuningAttempts || 8;
 
-        while (attempt < maxAttempts) {
+        while (true) {
           attempt++;
           const qualityOverride = buildBitrateOverride(currentBitrate, config);
 
